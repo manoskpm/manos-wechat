@@ -12,7 +12,7 @@ from pathlib import Path
 
 APP_NAME = "ManosWeChatTranslator"
 
-CONFIG_VERSION = 5
+CONFIG_VERSION = 6
 # 화면 인식 관련 값은 버전이 바뀌면 새 기본값으로 다시 맞춤
 LAYOUT_KEYS = ("chat_left_ratio", "title_height", "input_height", "ocr_min_score", "ocr_min_height",
                "title_map")
@@ -88,6 +88,8 @@ def load_config() -> dict:
             if saved.get("config_version", 1) < CONFIG_VERSION:
                 for k in LAYOUT_KEYS:
                     saved.pop(k, None)
+                if saved.get("config_version", 1) < 6:
+                    archive_temp_histories()
                 saved["config_version"] = CONFIG_VERSION
             cfg.update(saved)
         except (OSError, ValueError):
@@ -144,3 +146,20 @@ def rename_history(old: str, new: str) -> None:
         (data_dir() / "history" / f"{_safe_name(old)}.json").unlink()
     except OSError:
         pass
+
+
+def archive_temp_histories() -> None:
+    """임시 이름(대화방 N, 미지정)으로 저장된 기록을 history/_old 로 옮겨 보관 (지우지 않음)."""
+    h = data_dir() / "history"
+    old = h / "_old"
+    for f in list(h.glob("*.json")):
+        if f.stem.startswith(("대화방", "_미지정")):
+            old.mkdir(exist_ok=True)
+            try:
+                f.replace(old / f"{f.stem}_{int(f.stat().st_mtime)}.json")
+            except OSError:
+                pass
+
+
+def history_exists(vendor: str) -> bool:
+    return (data_dir() / "history" / f"{_safe_name(vendor)}.json").exists()

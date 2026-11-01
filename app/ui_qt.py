@@ -134,7 +134,9 @@ class InputBox(QPlainTextEdit):
 
 class Panel(QWidget):
     def __init__(self, ask_wechat_path: bool = False):
-        super().__init__(None, Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+        # 항상 맨 위가 아니라 위챗 창에 딸린 창으로 붙음 (_dock_tick 에서 위챗 창을 주인으로 지정)
+        super().__init__(None, Qt.FramelessWindowHint)
+        self._owner = None
         self.setObjectName("root")
         self.setWindowTitle(f"발주 번역기 v{VERSION}")
         if shortcuts.icon_path():
@@ -556,7 +558,10 @@ class Panel(QWidget):
         elif best is not None:
             canon = best["name"]
         else:
-            canon = f"대화방 {len(registry) + 1}"
+            n = len(registry) + 1
+            while C.history_exists(f"대화방 {n}") or any(e["name"] == f"대화방 {n}" for e in registry):
+                n += 1
+            canon = f"대화방 {n}"
             best = {"sig": res.title_sig, "name": canon}
             registry.append(best)
             changed = True
@@ -604,7 +609,22 @@ class Panel(QWidget):
             self._raw_key = name
             self.set_vendor(self.cfg.get("aliases", {}).get(name, name))
 
+    def _match_wechat_frame(self, res):
+        """위챗 맨 위 회색 줄의 높이와 색(반투명이라 바탕화면에 따라 바뀜)을 그대로 따라감."""
+        dpr = self.devicePixelRatioF() or 1.0
+        if res.band_h:
+            h = max(24, round(res.band_h / dpr))
+            if self.band.height() != h:
+                self.band.setFixedHeight(h)
+        if res.frame_rgb:
+            color = "#%02x%02x%02x" % tuple(res.frame_rgb[:3])
+            if color != getattr(self, "_frame_color", FRAME):
+                self._frame_color = color
+                self.setStyleSheet(STYLE.replace(f"QWidget#root {{ background: {FRAME}; }}",
+                                                 f"QWidget#root {{ background: {color}; }}"))
+
     def _handle_scan(self, res):
+        self._match_wechat_frame(res)
         vendor = self._resolve_vendor(res)
         if vendor != self.vendor:
             self.set_vendor(vendor)
@@ -617,7 +637,14 @@ class Panel(QWidget):
             self.history = hist
             self._save()
             self._render_all()
-        for e in auto:  # 새로 온 업체 메시지만 자동 번역 (옛날 메시지는 눌러야 번역)
+        # 화면에 보이는 업체 메시지는 바로 자동 번역 (메시지마다 한 번, 한 번에 최대 6개)
+        visible = [b.text for b in res.bubbles if b.side == "in"]
+        todo = [h for h in self.history if h["side"] == "in" and not h.get("ko") and not h.get("pending")
+                and any(similar(h["zh"], t) for t in visible)]
+        for e in auto:
+            if e not in todo and not e.get("ko") and not e.get("pending"):
+                todo.append(e)
+        for e in todo[-6:]:
             self._translate_entry(e)
 
     def _translate_entry_by_id(self, entry_id):
@@ -823,7 +850,12 @@ class Panel(QWidget):
         found = win_window.find_wechat()
         if not found:
             return
-        _, (l, t, r, b) = found
+        hwnd, (l, t, r, b) = found
+        own = self._own_hwnd()
+        if own and hwnd != self._owner:
+            win_window.set_owner(own, hwnd)
+            self._owner = hwnd
+            self._write_log(f"위챗 창에 붙임 owner={hwnd}")
         screen = QGuiApplication.primaryScreen()
         scale = screen.devicePixelRatio() if screen else 1.0
         w = int(max(self.cfg.get("panel_width", 400), 430) * scale)
@@ -836,7 +868,6 @@ class Panel(QWidget):
             x = 0
         geom = (x, t, w, b - t)
         if geom != self._last_geom:
-            own = self._own_hwnd()
             if sys.platform == "win32" and own:
                 win_window.place_visible(own, *geom)  # 위챗과 위아래 끝·높이를 정확히 맞춤 (화면 픽셀 기준)
             else:

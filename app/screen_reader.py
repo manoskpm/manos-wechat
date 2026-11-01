@@ -23,6 +23,8 @@ class ScanResult:
     title_h: int = 0
     title_text: str = ""            # 윈도우 한국어 인식으로 읽은 대화방 이름 (예: 칭펑 핸드메이드)
     title_png: bytes = b""          # 제목 줄 그림 (윈도우 인식이 실패하면 Claude에게 이름을 물어볼 때 사용)
+    band_h: int = 0                 # 위챗 맨 위 회색 줄 높이 (화면 픽셀)
+    frame_rgb: tuple = ()           # 위챗 바깥 테두리 색 (반투명이라 바탕화면에 따라 바뀜)
 
 
 def image_signature(img, size=(48, 48)):
@@ -160,7 +162,10 @@ def _find_divider(img, chat_left: float, y_from: int, y_to: int) -> int | None:
         mean, spread = row(y)
         if spread > 4:
             continue
-        if abs(mean - row(y - 2)[0]) >= 5 and abs(mean - row(y + 2)[0]) >= 5:
+        above, above_spread = row(y - 2)
+        # 얇은 선 = 바로 위의 고른 배경보다 어두운 줄 (아래는 사진이 바로 붙어도 됨).
+        # 맨 위 회색 줄 → 흰 카드 경계는 아래가 더 밝아서 제외됨.
+        if above_spread <= 4 and above - mean >= 5:
             return y
     return None
 
@@ -235,6 +240,18 @@ def looks_like_wechat_main(img) -> bool:
     return detect_chat_left_by_color(rgb) is not None
 
 
+def measure_frame(img, chat_left: float) -> tuple[int, tuple]:
+    """위챗 맨 위 회색 줄의 높이와 색을 잼 (번역 패널을 똑같이 맞추기 위해)."""
+    rgb = img.convert("RGB")
+    x = int(min(rgb.width - 1, chat_left + 30))
+    frame = rgb.getpixel((x, 4))
+    for y in range(4, min(rgb.height, 120)):
+        p = rgb.getpixel((x, y))
+        if sum(p) / 3 > sum(frame) / 3 + 12:  # 회색 줄 → 밝은 대화 카드
+            return y, frame
+    return 0, frame
+
+
 def analyze_window(img, ocr_result, cfg: dict, last_chat_left: float | None = None) -> ScanResult:
     """위챗 창 전체 사진 + 글자 인식 결과 → 거래처 이름과 말풍선."""
     w, h = img.width, img.height
@@ -253,7 +270,10 @@ def analyze_window(img, ocr_result, cfg: dict, last_chat_left: float | None = No
         side_fn=lambda l: bubble_side_by_color(rgb, l, chat_left, bg))
     # 제목 왼쪽 부분만 (창 크기를 바꿔도 같은 대화방이면 같은 모양이 되도록 고정 폭)
     title_img = img.crop((int(chat_left), 0, int(min(chat_right, chat_left + 360)), title_h))
-    return ScanResult(vendor, title_signature(title_img), bubbles, chat_left, title_h)
+    band_h, frame_rgb = measure_frame(img, chat_left)
+    res = ScanResult(vendor, title_signature(title_img), bubbles, chat_left, title_h)
+    res.band_h, res.frame_rgb = band_h, frame_rgb
+    return res
 
 
 class ScreenReader:
@@ -305,7 +325,7 @@ class ScreenReader:
                 res.title_png = png
                 return text
         from . import korean_ocr
-        title = img.crop((int(res.chat_left), 0, int(min(img.width, res.chat_left + 500)), res.title_h))
+        title = img.crop((int(res.chat_left), res.band_h, int(min(img.width, res.chat_left + 500)), res.title_h))
         text = korean_ocr.clean_title(korean_ocr.read_text(title.resize((title.width * 2, title.height * 2))))
         import io
         buf = io.BytesIO()

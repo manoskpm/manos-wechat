@@ -49,14 +49,15 @@ def test_panel_flow(panel):
     sig_a, sig_b = [0] * 1920, [255] * 960 + [0] * 960
     _scan(p, "", sig_a, [("in", "样品明天寄出"), ("in", "物流公司让今天送货")], png=b"png")
     assert p.vendor == "칭펑 핸드메이드"                      # 이름 못 읽는 방 → Claude 로 이름 읽기
-    assert [h.get("ko") for h in p.history] == ["", "한:物流公司让今天送货"]  # 맨 아래 1개만 자동 번역
+    assert [h.get("ko") for h in p.history] == ["한:样品明天寄出", "한:物流公司让今天送货"]  # 보이는 메시지 바로 번역
     _scan(p, "A汇星盛通中韩双向", sig_b, [("in", "好的")])
     assert p.vendor == "A汇星盛通中韩双向" and len(p.history) == 1  # 다른 방과 섞이지 않음
     _scan(p, "", sig_a, [("in", "物流公司让今天送货"), ("in", "明天到")])
     assert p.vendor == "칭펑 핸드메이드" and p.history[-1]["ko"] == "한:明天到"  # 새 메시지 자동 번역
+    p.history[0]["ko"] = ""
     p._translate_entry_by_id(p.history[0]["id"])
     p._drain_queue()
-    assert p.history[0]["ko"] == "한:样品明天寄出"            # 눌러서 번역
+    assert p.history[0]["ko"] == "한:样品明天寄出"            # 눌러서 번역 (화면에 안 보이는 옛날 메시지)
     p.input.setPlainText("샘플 보내주세요")
     p._send()
     p._drain_queue()

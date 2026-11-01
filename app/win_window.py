@@ -140,6 +140,14 @@ if sys.platform == "win32":
     def foreground_hwnd():
         return user32.GetForegroundWindow()
 
+    user32.SetWindowLongPtrW.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_void_p]
+    user32.SetWindowLongPtrW.restype = ctypes.c_void_p
+
+    def set_owner(own, owner) -> None:
+        """번역 패널을 위챗 창에 '딸린 창'으로 붙임: 위챗이 다른 창 뒤로 가면 같이 뒤로,
+        위챗을 누르면 같이 앞으로 (항상 맨 위에 떠 있지 않음)."""
+        user32.SetWindowLongPtrW(own, -8, owner)  # GWLP_HWNDPARENT
+
     def toplevel_of(hwnd):
         return user32.GetAncestor(hwnd, 2)  # GA_ROOT
 
@@ -173,6 +181,9 @@ else:  # 개발용(윈도우가 아닌 환경)에서는 아무것도 찾지 않�
 
     def foreground_hwnd():
         return None
+
+    def set_owner(own, owner) -> None:
+        pass
 
     def screen_size():
         return 1920, 1080

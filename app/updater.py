@@ -124,5 +124,8 @@ if %tries% lss 30 goto retry
 start "" "{exe}"
 del "%~f0"
 """)
+    # 새 번역기가 예전 번역기의 임시 폴더를 물려받지 않도록 (PyInstaller 공식 방법)
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("_PYI_", "_MEI"))}
+    env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
     subprocess.Popen(["cmd.exe", "/c", bat], creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-                     close_fds=True)
+                     close_fds=True, env=env)

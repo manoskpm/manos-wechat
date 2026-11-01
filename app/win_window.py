@@ -148,6 +148,20 @@ if sys.platform == "win32":
         위챗을 누르면 같이 앞으로 (항상 맨 위에 떠 있지 않음)."""
         user32.SetWindowLongPtrW(own, -8, owner)  # GWLP_HWNDPARENT
 
+    class _MARGINS(ctypes.Structure):
+        _fields_ = [("l", ctypes.c_int), ("r", ctypes.c_int), ("t", ctypes.c_int), ("b", ctypes.c_int)]
+
+    def style_like_wechat(own) -> None:
+        """번역창 모서리를 위챗처럼 둥글게, 그림자도 위챗처럼 (윈도우 11 기능, 안 되면 그냥 넘어감).
+        우리 창에만 적용하며 위챗 창은 건드리지 않음."""
+        try:
+            pref = ctypes.c_int(2)  # DWMWCP_ROUND
+            dwmapi.DwmSetWindowAttribute(wintypes.HWND(own), 33, ctypes.byref(pref), 4)
+            m = _MARGINS(1, 1, 1, 1)
+            dwmapi.DwmExtendFrameIntoClientArea(wintypes.HWND(own), ctypes.byref(m))
+        except (AttributeError, OSError):
+            pass
+
     def toplevel_of(hwnd):
         return user32.GetAncestor(hwnd, 2)  # GA_ROOT
 
@@ -183,6 +197,9 @@ else:  # 개발용(윈도우가 아닌 환경)에서는 아무것도 찾지 않�
         return None
 
     def set_owner(own, owner) -> None:
+        pass
+
+    def style_like_wechat(own) -> None:
         pass
 
     def screen_size():

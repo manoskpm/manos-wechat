@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import threading
 import time
+
+import numpy as np
 import traceback
 from dataclasses import dataclass, field
 
@@ -24,7 +26,12 @@ class ScanResult:
     title_text: str = ""            # 윈도우 한국어 인식으로 읽은 대화방 이름 (예: 칭펑 핸드메이드)
     title_png: bytes = b""          # 제목 줄 그림 (윈도우 인식이 실패하면 Claude에게 이름을 물어볼 때 사용)
     band_h: int = 0                 # 위챗 맨 위 회색 줄 높이 (화면 픽셀)
+    items: list = field(default_factory=list)   # 거울 화면용 덩어리 (segment.Item)
+    chat_top: int = 0               # 대화 영역 위쪽 (제목 아래 선)
+    chat_bottom: int = 0            # 대화 영역 아래쪽 (입력칸 윗선)
+    win_h: int = 0                  # 위챗 창 높이 (화면 픽셀)
     frame_rgb: tuple = ()           # 위챗 바깥 테두리 색 (반투명이라 바탕화면에 따라 바뀜)
+    chat_bg: tuple = ()             # 위챗 대화 영역 바탕색
 
 
 def image_signature(img, size=(48, 48)):
@@ -176,6 +183,23 @@ def detect_header_bottom(img, chat_left: float) -> int | None:
     return _find_divider(img, chat_left, 20, int(img.height * 0.25))
 
 
+def detect_input_box_top(img, chat_left: float, chat_right: float | None = None) -> int | None:
+    """위챗 입력칸 윗선: 대화 영역 가로 거의 전체를 잇는 얇은 회색 선 (입력칸 테두리).
+    입력칸이 대화 내용 위에 그려지므로 사진이 걸쳐 있어도 이 선은 끊기지 않음."""
+    arr = np.asarray(img.convert("L"), dtype=np.int16)
+    h, w = arr.shape
+    cr = int(chat_right or w)
+    sub = arr[:, int(chat_left) + 20:cr - 20]
+    if sub.shape[1] < 50:
+        return None
+    gray = ((sub >= 200) & (sub <= 243)).mean(axis=1)
+    light = (sub >= 245).mean(axis=1)
+    for y in range(int(h * 0.45), h - 60):
+        if gray[y] >= 0.85 and light[y + 3] >= 0.85:
+            return y
+    return None
+
+
 def detect_input_top(img, chat_left: float) -> int | None:
     """메시지 입력창의 윗 테두리 (입력창에 붙여넣은 글은 읽지 않기 위해)."""
     return _find_divider(img, chat_left, int(img.height * 0.6), int(img.height * 0.97))
@@ -318,6 +342,16 @@ class ScreenReader:
         result, _ = self._get_ocr()(np.array(img), use_cls=False)
         res = analyze_window(img, result, self.cfg, self._chat_left)
         self._chat_left = res.chat_left
+        # 거울 화면: 대화 영역의 모든 덩어리(말풍선·사진·파일·시간 줄 …)를 위챗과 같은 높이로
+        from .chat_parser import to_lines
+        from .segment import segment_chat
+        chat_right = detect_chat_right_by_color(img, res.chat_left) or img.width
+        bottom = detect_input_box_top(img, res.chat_left, chat_right) or int(img.height * 0.76)
+        bg = background_color(img, res.chat_left, res.title_h) or (250, 250, 250)
+        res.chat_top, res.chat_bottom, res.win_h = res.title_h, bottom, img.height
+        res.chat_bg = tuple(bg[:3])
+        res.items = segment_chat(img, to_lines(result, self.cfg["ocr_min_score"], 10),
+                                 res.chat_left, chat_right, res.title_h, bottom, bg)
         # 중국어 인식으로 읽은 제목은 중국어가 대부분일 때만 이름으로 씀 ('나무 옷걸이 lyt' → 'l lyt' 방지)
         v = res.vendor.replace(" ", "")
         cjk = sum(1 for ch in v if "\u4e00" <= ch <= "\u9fff")

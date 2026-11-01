@@ -1,0 +1,59 @@
+"""거울 화면용 덩어리 나누기: 위챗 모양 그림을 직접 그려서 확인 (실제 대화 캡처는 저장소에 올리지 않음)."""
+import random
+
+from PIL import Image, ImageDraw
+
+from app.chat_parser import Line
+from app.segment import ko_time, segment_chat
+
+BG = (250, 250, 250)
+
+
+def _chat():
+    img = Image.new("RGB", (700, 900), BG)
+    d = ImageDraw.Draw(img)
+    lines = []
+
+    def avatar(side, y):
+        x = 20 if side == "in" else 620
+        d.rectangle([x, y, x + 44, y + 44], fill=(200, 30, 30) if side == "in" else (190, 190, 190))
+
+    def bubble(side, y, w, h, text, color):
+        avatar(side, y)
+        x = 76 if side == "in" else 608 - w
+        d.rounded_rectangle([x, y, x + w, y + h], 4, fill=color)
+        lines.append(Line(x + 12, y + 12, x + w - 12, y + h - 12, text))
+
+    bubble("in", 40, 140, 44, "空白包装发货", (236, 236, 240))
+    bubble("out", 110, 300, 68, "老板以后我们订的所有货", (156, 240, 156))
+    d.text((300, 200), "Tuesday 11:59", fill=(160, 160, 160))
+    lines.append(Line(300, 200, 380, 212, "Tuesday 11:59"))
+    avatar("in", 240)                                    # 사진: 알록달록한 큰 칸
+    rnd = random.Random(1)
+    for yy in range(240, 440, 10):
+        for xx in range(76, 276, 10):
+            d.rectangle([xx, yy, xx + 9, yy + 9], fill=tuple(rnd.randrange(256) for _ in range(3)))
+    bubble("in", 470, 260, 100, "报价单.xlsx 1.2M", (236, 236, 240))
+    lines[-1] = Line(88, 482, 300, 558, "报价单.xlsx 1.2M")
+    bubble("in", 600, 60, 44, "可以", (236, 236, 240))
+    avatar("in", 680)                                    # 아래 끝에서 잘린 사진
+    for yy in range(680, 780, 10):
+        for xx in range(76, 196, 10):
+            d.rectangle([xx, yy, xx + 9, yy + 9], fill=tuple(rnd.randrange(256) for _ in range(3)))
+    return img, lines
+
+
+def test_segment_mixed_chat():
+    img, lines = _chat()
+    items = segment_chat(img, lines, 0, 700, 0, 762, BG)
+    got = [(i.kind, i.side) for i in items]
+    assert got == [("text", "in"), ("text", "out"), ("time", "center"), ("photo", "in"),
+                   ("file", "in"), ("text", "in"), ("photo", "in")]
+    assert items[0].text == "空白包装发货" and items[0].y0 == 40
+    assert items[1].extra["bg"][1] > 200                 # 내 말풍선 초록색 그대로
+    assert items[3].png                                  # 사진은 잘라서 그대로 보여줌
+
+
+def test_ko_time():
+    assert ko_time("Thursday 11:08") == "목요일 11:08"
+    assert ko_time("昨天 09:12") == "어제 09:12"

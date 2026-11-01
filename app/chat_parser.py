@@ -89,7 +89,8 @@ def parse_chat(lines: list[Line], width: float, height: float,
 
     side_fn(line) 은 말풍선 색으로 내 것("out")/업체 것("in")을 판단 (모르면 None).
     """
-    title_parts = [l for l in lines if (l.y0 + l.y1) / 2 < title_height]
+    # 제목 줄의 아이콘(뒤로 가기 화살표, 말풍선 아이콘)을 글자로 잘못 읽은 한 글자짜리는 버림
+    title_parts = [l for l in lines if (l.y0 + l.y1) / 2 < title_height and len(normalize(l.text)) >= 2]
     title_parts.sort(key=lambda l: l.x0)
     vendor = " ".join(l.text for l in title_parts)
     vendor = re.sub(r"\s*[(（]\d+[)）]\s*$", "", vendor).strip()  # 단체방 인원수 표시 제거

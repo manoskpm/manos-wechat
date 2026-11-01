@@ -41,11 +41,12 @@ Write-Output $result.Text
 """
 
 _disabled = False
+last_error = ""   # 마지막으로 실패한 이유 (기록 파일에 남김)
 
 
 def read_text(img, lang: str = "ko", timeout: float = 20) -> str | None:
     """그림 속 글자를 윈도우 글자 인식으로 읽음 (실패하면 None)."""
-    global _disabled
+    global _disabled, last_error
     if sys.platform != "win32" or _disabled:
         return None
     fd, path = tempfile.mkstemp(suffix=".png", prefix="manos_title_")
@@ -61,11 +62,16 @@ def read_text(img, lang: str = "ko", timeout: float = 20) -> str | None:
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         if proc.returncode == 2:  # 이 언어의 글자 인식이 설치되어 있지 않음
             _disabled = True
+            last_error = f"윈도우에 '{lang}' 글자 인식이 설치되어 있지 않음"
             return None
         if proc.returncode != 0:
+            last_error = f"PowerShell 오류({proc.returncode}): " + proc.stderr.decode("utf-8", "replace")[-300:]
             return None
-        return proc.stdout.decode("utf-8", "replace").strip() or None
-    except (OSError, subprocess.SubprocessError):
+        text = proc.stdout.decode("utf-8", "replace").strip()
+        last_error = "" if text else "글자를 찾지 못함"
+        return text or None
+    except (OSError, subprocess.SubprocessError) as e:
+        last_error = f"실행 실패: {e}"
         return None
     finally:
         try:

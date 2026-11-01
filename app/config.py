@@ -92,6 +92,14 @@ def load_config() -> dict:
             cfg.update(saved)
         except (OSError, ValueError):
             pass
+    # 예전 버전이 아이콘을 글자로 잘못 읽어 만든 한 글자짜리 대화방 이름(예: 口)은 정리
+    cfg["known_vendors"] = [v for v in cfg.get("known_vendors", []) if len(v.replace(" ", "")) >= 2]
+    for e in cfg.get("title_map", []):
+        if len(str(e.get("name", "")).replace(" ", "")) < 2:
+            old = str(e.get("name", ""))
+            e["name"] = "대화방 " + str(cfg["title_map"].index(e) + 1)
+            if old:
+                rename_history(old, e["name"])  # 그 이름으로 저장된 기록도 함께 옮김
     return cfg
 
 

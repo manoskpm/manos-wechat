@@ -30,16 +30,49 @@ def can_update() -> bool:
     return bool(getattr(sys, "frozen", False)) and current_version() is not None and sys.platform == "win32"
 
 
-def check_latest(timeout: float = 10) -> dict | None:
-    """새 버전이 있으면 {"version", "url", "notes"} 를 돌려줌. 없거나 확인 실패면 None."""
+def _contexts():
+    """인터넷 보안 접속 방법 후보: 기본 → 윈도우 인증서 저장소(번역 기능과 같은 방식) → 내장 인증서."""
+    import ssl
+    yield "기본", None
+    try:
+        import truststore
+        yield "윈도우 인증서", truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    except Exception:
+        pass
+    try:
+        import certifi
+        yield "내장 인증서", ssl.create_default_context(cafile=certifi.where())
+    except Exception:
+        pass
+
+
+def _open(url: str, timeout: float, accept: str | None = None):
+    headers = {"User-Agent": "ManosTranslator"}
+    if accept:
+        headers["Accept"] = accept
+    errors = []
+    for name, ctx in _contexts():
+        try:
+            return urllib.request.urlopen(urllib.request.Request(url, headers=headers),
+                                          timeout=timeout, context=ctx)
+        except Exception as e:  # 다음 방법으로 다시 시도
+            errors.append(f"{name}: {e}")
+    raise OSError(" / ".join(errors))
+
+
+def check_latest(timeout: float = 15) -> dict | None:
+    """새 버전이 있으면 {"version", "url", "notes"} 를 돌려줌. 없으면 None, 확인 실패면 OSError."""
     cur = current_version()
     if cur is None:
         return None
-    req = urllib.request.Request(LATEST_URL, headers={
-        "User-Agent": "ManosTranslator", "Accept": "application/vnd.github+json"})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
+    with _open(LATEST_URL, timeout, "application/vnd.github+json") as r:
         data = json.loads(r.read().decode("utf-8"))
     return pick_update(data, cur)
+
+
+def latest_version_text(timeout: float = 15) -> str:
+    with _open(LATEST_URL, timeout, "application/vnd.github+json") as r:
+        return json.loads(r.read().decode("utf-8")).get("tag_name", "?")
 
 
 def pick_update(release: dict, cur: int) -> dict | None:
@@ -57,8 +90,7 @@ def download(url: str, progress=None) -> str:
     """새 실행 파일을 지금 실행 파일 옆에 받아 둠. 받은 파일 경로를 돌려줌."""
     target_dir = os.path.dirname(sys.executable)
     new_path = os.path.join(target_dir, "ManosTranslator.new.exe")
-    req = urllib.request.Request(url, headers={"User-Agent": "ManosTranslator"})
-    with urllib.request.urlopen(req, timeout=60) as r, open(new_path, "wb") as f:
+    with _open(url, 60) as r, open(new_path, "wb") as f:
         total = int(r.headers.get("Content-Length") or 0)
         done = 0
         while True:

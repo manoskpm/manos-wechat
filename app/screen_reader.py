@@ -281,9 +281,13 @@ class ScreenReader:
         for sig, text in self._title_cache:
             if signature_distance(sig, res.title_sig) <= 5.0:
                 return text
-        from .korean_ocr import clean_title, read_text
+        from . import korean_ocr
         title = img.crop((int(res.chat_left), 0, int(min(img.width, res.chat_left + 500)), res.title_h))
-        text = clean_title(read_text(title.resize((title.width * 2, title.height * 2))))
+        text = korean_ocr.clean_title(korean_ocr.read_text(title.resize((title.width * 2, title.height * 2))))
+        if len(text.replace(" ", "")) < 2:
+            text = ""
+        if not text and korean_ocr.last_error:
+            self._log(f"대화방 이름 읽기 실패: {korean_ocr.last_error}")
         self._title_cache = (self._title_cache + [(res.title_sig, text)])[-100:]
         return text
 

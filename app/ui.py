@@ -156,16 +156,27 @@ class App:
             wechat_launcher.launch(path)
 
     # ------------------------------------------------------------ 자동 업데이트
-    def _check_update(self):
+    def _check_update(self, manual: bool = False):
         def work():
             try:
                 info = updater.check_latest()
             except Exception as e:  # 인터넷이 안 되면 다음에 다시 확인
                 self._write_log(f"업데이트 확인 실패: {e}")
+                if manual:
+                    self.q.put(("update_msg", f"업데이트 확인에 실패했습니다.\n\n{e}"))
                 return
             if info:
                 self.q.put(("update", info))
+            elif manual:
+                self.q.put(("update_msg", f"지금 쓰시는 v{VERSION}이 최신 버전입니다."))
         threading.Thread(target=work, daemon=True).start()
+
+    def _manual_update(self):
+        if not updater.can_update():
+            self._dialog(messagebox.showinfo, "업데이트 확인", "설치된 실행 파일에서만 업데이트할 수 있습니다.")
+            return
+        self._manual_update_check = True
+        self._check_update(manual=True)
 
     def _show_update(self, info):
         self._update_info = info
@@ -208,6 +219,7 @@ class App:
                                     bg="#f59e0b", fg="white", activebackground="#d97706",
                                     font=(FONT, 9, "bold"))
         self._update_info = None
+        self._manual_update_check = False
 
         opts = tk.Frame(self.root, bg=BG)
         opts.pack(fill="x", padx=8, pady=(6, 2))
@@ -308,6 +320,8 @@ class App:
 
     def _settings_menu(self):
         m = tk.Menu(self.root, tearoff=0)
+        m.add_command(label=f"업데이트 확인 (지금 v{VERSION})", command=self._manual_update)
+        m.add_separator()
         m.add_command(label="내 지시문·용어 편집", command=lambda: self._open(C.instructions_path()))
         m.add_command(label="API 키 변경", command=self._ask_api_key)
         m.add_command(label="화면 인식 확인용 사진 저장", command=self._save_debug)
@@ -436,6 +450,8 @@ class App:
                 known.append(raw)
                 changed = True
             if best_ok and best["name"] != canon:
+                # 같은 대화방 이름을 더 정확히 읽게 됨 (예: 대화방 3 → 칭펑 핸드메이드): 기록도 옮김
+                C.rename_history(self.cfg.get("aliases", {}).get(best["name"], best["name"]), canon)
                 best["name"] = canon
                 changed = True
             elif not best_ok:
@@ -601,6 +617,12 @@ class App:
                     self._handle_error(*item[1:])
                 elif kind == "update":
                     self._show_update(item[1])
+                    if self._manual_update_check:
+                        self._manual_update_check = False
+                        self._do_update()
+                elif kind == "update_msg":
+                    self._manual_update_check = False
+                    self._dialog(messagebox.showinfo, "업데이트 확인", item[1])
                 elif kind == "update_progress":
                     self.update_btn.config(text=f"받는 중 {item[1]}%")
                 elif kind == "update_ready":

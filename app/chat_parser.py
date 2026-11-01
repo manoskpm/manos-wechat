@@ -9,7 +9,10 @@ import re
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 
-TIME_RE = re.compile(r"^(昨天|今天|星期.|周.|上午|下午|晚上|凌晨)?\s*\d{1,2}[:：]\d{2}$|^\d{4}年|^\d{1,2}月\d{1,2}日")
+TIME_RE = re.compile(
+    r"^(昨天|今天|星期.|周.|上午|下午|晚上|凌晨|Yesterday|Today|Monday|Tuesday|Wednesday|Thursday|Friday|"
+    r"Saturday|Sunday|Mon|Tue|Wed|Thu|Fri|Sat|Sun)?\s*\d{1,2}[:：]\d{2}(\s*[AP]M)?$"
+    r"|^\d{4}[年/-]|^\d{1,2}月\d{1,2}日|^\d{1,2}/\d{1,2}(/\d{2,4})?$|^(昨天|Yesterday|星期.|周.)$", re.I)
 CJK_RE = re.compile(r"[一-鿿]")
 HANGUL_RE = re.compile(r"[가-힣]")
 
@@ -35,7 +38,7 @@ class Bubble:
     y1: float
 
 
-def to_lines(ocr_result, min_score: float = 0.6) -> list[Line]:
+def to_lines(ocr_result, min_score: float = 0.6, min_height: float = 0) -> list[Line]:
     lines = []
     for box, text, score in ocr_result or []:
         try:
@@ -46,13 +49,46 @@ def to_lines(ocr_result, min_score: float = 0.6) -> list[Line]:
             continue
         xs = [p[0] for p in box]
         ys = [p[1] for p in box]
+        if max(ys) - min(ys) < min_height:  # 사진 속 작은 글씨 등은 제외
+            continue
         lines.append(Line(min(xs), min(ys), max(xs), max(ys), str(text).strip()))
-    return lines
+    return merge_rows(lines)
+
+
+def merge_rows(lines: list[Line]) -> list[Line]:
+    """같은 줄인데 글자 인식이 두 조각으로 나눈 것을 다시 합침."""
+    out: list[Line] = []
+    for l in sorted(lines, key=lambda l: (l.y0, l.x0)):
+        for o in out:
+            overlap = min(o.y1, l.y1) - max(o.y0, l.y0)
+            if overlap > 0.5 * min(o.h, l.h) and 0 <= l.x0 - o.x1 < 2 * max(o.h, l.h):
+                o.text += l.text
+                o.x1, o.y0, o.y1 = l.x1, min(o.y0, l.y0), max(o.y1, l.y1)
+                break
+        else:
+            out.append(Line(l.x0, l.y0, l.x1, l.y1, l.text))
+    return out
+
+
+def detect_chat_left(lines: list[Line], width: float) -> float | None:
+    """왼쪽 대화방 목록의 날짜(10/28 등) 오른쪽 끝 = 대화 영역의 시작 위치."""
+    edges = [l.x1 for l in lines if l.x1 < width * 0.65 and TIME_RE.search(l.text)]
+    if len(edges) < 2:
+        return None
+    return max(edges) + 8
+
+
+def crop_lines(lines: list[Line], left: float) -> list[Line]:
+    """대화 영역에 있는 줄만 남기고 좌표를 대화 영역 기준으로 바꿈."""
+    return [Line(l.x0 - left, l.y0, l.x1 - left, l.y1, l.text) for l in lines if l.x0 >= left]
 
 
 def parse_chat(lines: list[Line], width: float, height: float,
-               title_height: float, input_height: float) -> tuple[str, list[Bubble]]:
-    """대화 영역 이미지의 OCR 줄들을 (거래처 이름, 말풍선 목록)으로 정리."""
+               title_height: float, input_height: float, side_fn=None) -> tuple[str, list[Bubble]]:
+    """대화 영역 이미지의 OCR 줄들을 (거래처 이름, 말풍선 목록)으로 정리.
+
+    side_fn(line) 은 말풍선 색으로 내 것("out")/업체 것("in")을 판단 (모르면 None).
+    """
     title_parts = [l for l in lines if (l.y0 + l.y1) / 2 < title_height]
     title_parts.sort(key=lambda l: l.x0)
     vendor = " ".join(l.text for l in title_parts)
@@ -81,7 +117,9 @@ def parse_chat(lines: list[Line], width: float, height: float,
             bubbles[-1].text += l.text
             bubbles[-1].y1 = l.y1
         else:
-            side = "in" if l.x0 < (width - l.x1) else "out"
+            side = side_fn(l) if side_fn else None
+            if side is None:
+                side = "in" if l.x0 < (width - l.x1) else "out"
             bubbles.append(Bubble(side, l.text, l.y0, l.y1))
         prev = l
     return vendor, bubbles

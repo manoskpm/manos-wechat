@@ -66,3 +66,37 @@ def test_real_ocr_on_mock_screenshot():
     assert len(ins) == 2 and len(outs) == 1
     assert "单价28元" in ins[0] and "25天" in ins[0]
     assert "32元" in ins[1]
+
+
+def test_real_wechat_screenshot():
+    """대표님 PC의 실제 위챗 화면 캡처로 확인 (한국어 이름은 못 읽고, 사진 속 작은 글씨는 무시)."""
+    pytest.importorskip("rapidocr_onnxruntime")
+    import numpy as np
+    from PIL import Image
+    from rapidocr_onnxruntime import RapidOCR
+
+    from app.config import DEFAULTS
+    from app.screen_reader import analyze_window
+
+    path = Path(__file__).parent / "fixtures" / "real_wechat.png"
+    if not path.exists():  # 실제 대화가 담긴 사진이라 저장소에는 올리지 않음
+        pytest.skip("real_wechat.png 없음")
+    img = Image.open(path)
+    result, _ = RapidOCR()(np.array(img))
+    res = analyze_window(img, result, dict(DEFAULTS))
+    assert 360 <= res.chat_left <= 390  # 대화방 목록과 대화 영역의 경계 (약 375px)
+    assert [(b.side, b.text) for b in res.bubbles if b.side == "in"] == [("in", "物流公司让今天送货")]
+    assert all(b.side == "out" for b in res.bubbles if "样品" in b.text)
+
+
+def test_merge_rows_joins_split_line():
+    from app.chat_parser import merge_rows
+    merged = merge_rows([L(476, 98, 742, 115, "麻烦告诉"), L(746, 98, 797, 116, "一下,谢")])
+    assert len(merged) == 1 and merged[0].text == "麻烦告诉一下,谢"
+
+
+def test_detect_chat_left_from_list_dates():
+    from app.chat_parser import detect_chat_left
+    lines = [L(314, 199, 361, 216, "10/30"), L(323, 281, 363, 300, "10/28"),
+             L(582, 182, 695, 201, "Thursday 03:30")]
+    assert detect_chat_left(lines, 905) == 371

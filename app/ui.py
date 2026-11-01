@@ -33,7 +33,11 @@ class App:
         self.root.title("발주 번역기")
         self.root.configure(bg=BG)
         self.root.attributes("-topmost", True)
-        self.root.geometry(f"{self.cfg['panel_width']}x760+100+100")
+        # 화면 배율(125%, 150%)에 맞춰 패널 폭도 키움
+        self.scale = max(1.0, self.root.winfo_fpixels("1i") / 96.0)
+        self.pw = int(self.cfg["panel_width"] * self.scale)
+        self.root.geometry(f"{self.pw}x{int(760 * self.scale)}+100+100")
+        self.root.minsize(int(320 * self.scale), int(520 * self.scale))
         self.root.protocol("WM_DELETE_WINDOW", self.quit)
 
         self.q: queue.Queue = queue.Queue()
@@ -44,6 +48,8 @@ class App:
         self.own_clip = None
         self.translator = None
         self._last_geom = None
+        self.title_sig = None
+        self._unknown_hint_shown = False
 
         self._build()
         try:  # 프로그램을 켜기 전에 복사해 둔 글은 번역하지 않음
@@ -53,7 +59,8 @@ class App:
         self._ensure_api_key()
         self.set_vendor("")
 
-        self.reader = ScreenReader(self.cfg, self._on_scan_thread, self._own_hwnd)
+        self.reader = ScreenReader(self.cfg, self._on_scan_thread, self._own_hwnd,
+                                   log_path=C.data_dir() / "log.txt")
         self.reader.start()
 
         self.root.after(100, self._drain_queue)
@@ -89,11 +96,50 @@ class App:
         tk.Checkbutton(opts, text="자동 읽기", variable=self.auto_var, bg=BG, font=(FONT, 9),
                        command=self._save_toggles).pack(side="right")
 
+        # 아래쪽(상태줄, 결과, 입력창, 문장 버튼)을 먼저 배치해야 창이 작아도 잘리지 않음
+        self.status_var = tk.StringVar(value="")
+        tk.Label(self.root, textvariable=self.status_var, bg="#eef2f7", fg=GRAY, font=(FONT, 8),
+                 anchor="w").pack(fill="x", side="bottom")
+
+        wrap = self.pw - int(40 * self.scale)
+        res = tk.Frame(self.root, bg="#fff8e6", highlightbackground="#f5d27a", highlightthickness=1)
+        res.pack(fill="x", side="bottom", padx=8, pady=(4, 4))
+        self.res_zh = tk.Label(res, text="", bg="#fff8e6", font=(FONT, 10, "bold"),
+                               justify="left", anchor="w", wraplength=wrap)
+        self.res_zh.pack(fill="x", padx=6, pady=(4, 0))
+        self.res_back = tk.Label(res, text="", bg="#fff8e6", fg=GRAY, font=(FONT, 8),
+                                 justify="left", anchor="w", wraplength=wrap)
+        self.res_back.pack(fill="x", padx=6)
+        row = tk.Frame(res, bg="#fff8e6")
+        row.pack(fill="x", padx=6, pady=4)
+        self.copy_lbl = tk.Label(row, text="번역된 중국어가 여기에 나옵니다", bg="#fff8e6", fg=ORANGE,
+                                 font=(FONT, 9, "bold"))
+        self.copy_lbl.pack(side="left")
+        tk.Button(row, text="다시 복사", font=(FONT, 8), command=self._recopy).pack(side="right")
+
+        self.input = tk.Text(self.root, height=3, wrap="char", font=f, relief="solid", bd=1,
+                             highlightthickness=2, highlightcolor="#3b82f6")
+        self.input.pack(fill="x", side="bottom", padx=8, pady=2)
+        self.input.bind("<Return>", self._on_enter)
+        self.input.bind("<Shift-Return>", lambda e: None)
+        tk.Label(self.root, text="한국어로 쓰고 Enter (줄바꿈: Shift+Enter)", bg=BG, fg=GRAY,
+                 font=(FONT, 8), anchor="w").pack(fill="x", side="bottom", padx=8, pady=(6, 0))
+
+        chips = tk.Frame(self.root, bg=BG)
+        chips.pack(fill="x", side="bottom", padx=8)
+        for i, phrase in enumerate(self.cfg.get("quick_phrases", [])):
+            tk.Button(chips, text=phrase, font=(FONT, 8), relief="groove", bg="#f1f3f5",
+                      command=lambda p=phrase: self._insert_phrase(p)).grid(
+                row=i // 2, column=i % 2, sticky="ew", padx=1, pady=1)
+        chips.columnconfigure(0, weight=1)
+        chips.columnconfigure(1, weight=1)
+
+        # 대화 기록은 남는 공간을 모두 차지
         logf = tk.Frame(self.root, bg=BG)
         logf.pack(fill="both", expand=True, padx=8, pady=4)
         sb = tk.Scrollbar(logf)
         sb.pack(side="right", fill="y")
-        self.log = tk.Text(logf, wrap="char", bg=LOG_BG, relief="flat", font=f,
+        self.log = tk.Text(logf, wrap="char", bg=LOG_BG, relief="flat", font=f, height=5,
                            yscrollcommand=sb.set, padx=8, pady=6, spacing1=2, spacing3=2)
         self.log.pack(side="left", fill="both", expand=True)
         sb.config(command=self.log.yview)
@@ -104,42 +150,8 @@ class App:
         self.log.tag_config("out_ko", foreground=GRAY)
         self.log.tag_config("out_zh", foreground=GREEN, font=(FONT, 10, "bold"))
         self.log.tag_config("err", foreground="#dc2626")
+        self.log.tag_config("hint", foreground="#7c3aed")
         self.log.config(state="disabled")
-
-        chips = tk.Frame(self.root, bg=BG)
-        chips.pack(fill="x", padx=8)
-        for i, phrase in enumerate(self.cfg.get("quick_phrases", [])):
-            tk.Button(chips, text=phrase, font=(FONT, 8), relief="groove", bg="#f1f3f5",
-                      command=lambda p=phrase: self._insert_phrase(p)).grid(
-                row=i // 2, column=i % 2, sticky="ew", padx=1, pady=1)
-        chips.columnconfigure(0, weight=1)
-        chips.columnconfigure(1, weight=1)
-
-        tk.Label(self.root, text="한국어로 쓰고 Enter (줄바꿈: Shift+Enter)", bg=BG, fg=GRAY,
-                 font=(FONT, 8), anchor="w").pack(fill="x", padx=8, pady=(6, 0))
-        self.input = tk.Text(self.root, height=3, wrap="char", font=f, relief="solid", bd=1,
-                             highlightthickness=2, highlightcolor="#3b82f6")
-        self.input.pack(fill="x", padx=8, pady=2)
-        self.input.bind("<Return>", self._on_enter)
-        self.input.bind("<Shift-Return>", lambda e: None)
-
-        res = tk.Frame(self.root, bg="#fff8e6", highlightbackground="#f5d27a", highlightthickness=1)
-        res.pack(fill="x", padx=8, pady=(4, 4))
-        self.res_zh = tk.Label(res, text="", bg="#fff8e6", font=(FONT, 10, "bold"),
-                               justify="left", anchor="w", wraplength=self.cfg["panel_width"] - 40)
-        self.res_zh.pack(fill="x", padx=6, pady=(4, 0))
-        self.res_back = tk.Label(res, text="", bg="#fff8e6", fg=GRAY, font=(FONT, 8),
-                                 justify="left", anchor="w", wraplength=self.cfg["panel_width"] - 40)
-        self.res_back.pack(fill="x", padx=6)
-        row = tk.Frame(res, bg="#fff8e6")
-        row.pack(fill="x", padx=6, pady=4)
-        self.copy_lbl = tk.Label(row, text="", bg="#fff8e6", fg=ORANGE, font=(FONT, 9, "bold"))
-        self.copy_lbl.pack(side="left")
-        tk.Button(row, text="다시 복사", font=(FONT, 8), command=self._recopy).pack(side="right")
-
-        self.status_var = tk.StringVar(value="")
-        tk.Label(self.root, textvariable=self.status_var, bg="#eef2f7", fg=GRAY, font=(FONT, 8),
-                 anchor="w").pack(fill="x", side="bottom")
 
     # ------------------------------------------------------------ 설정
     def _ensure_api_key(self):
@@ -190,10 +202,21 @@ class App:
         C.save_config(self.cfg)
 
     def _ask_vendor(self):
-        name = simpledialog.askstring("거래처", "거래처 이름을 입력하세요.", parent=self.root,
-                                      initialvalue=self.vendor)
-        if name is not None:
-            self.set_vendor(name.strip())
+        name = simpledialog.askstring(
+            "거래처", "지금 위챗에 열린 대화방의 거래처 이름을 입력하세요.\n"
+            "(한 번 정하면 다음부터 이 대화방을 열 때 자동으로 바뀝니다)",
+            parent=self.root, initialvalue=self.vendor)
+        if name is None or not name.strip():
+            return
+        name = name.strip()
+        if self.title_sig:
+            from .screen_reader import signature_distance
+            tm = [e for e in self.cfg.get("title_map", [])
+                  if signature_distance(e["sig"], self.title_sig) > 6.0]
+            tm.append({"sig": self.title_sig, "name": name})
+            self.cfg["title_map"] = tm[-200:]
+            C.save_config(self.cfg)
+        self.set_vendor(name)
 
     # ------------------------------------------------------------ 거래처 / 기록
     def set_vendor(self, vendor: str):
@@ -226,6 +249,12 @@ class App:
         self.log.config(state="disabled")
         self.log.see("end")
 
+    def _hint(self, msg: str):
+        self.log.config(state="normal")
+        self.log.insert("end", "ℹ " + msg + "\n\n", "hint")
+        self.log.config(state="disabled")
+        self.log.see("end")
+
     def _log_error(self, msg: str):
         self.log.config(state="normal")
         self.log.insert("end", "⚠ " + msg + "\n\n", "err")
@@ -233,15 +262,36 @@ class App:
         self.log.see("end")
 
     # ------------------------------------------------------------ 받은 메시지
-    def _on_scan_thread(self, vendor, bubbles):
-        self.q.put(("scan", vendor, bubbles))
+    def _on_scan_thread(self, res):
+        self.q.put(("scan", res))
 
-    def _handle_scan(self, vendor, bubbles):
-        if vendor and not similar(vendor, self.vendor, 0.8):
-            self.set_vendor(vendor)
+    def _vendor_from_title(self, res):
+        if res.vendor:
+            return res.vendor
+        from .screen_reader import signature_distance
+        best = min(self.cfg.get("title_map", []), default=None,
+                   key=lambda e: signature_distance(e["sig"], res.title_sig))
+        if best and signature_distance(best["sig"], res.title_sig) <= 6.0:
+            return best["name"]
+        return None
+
+    def _handle_scan(self, res):
+        from .screen_reader import signature_distance
+        same_room = signature_distance(res.title_sig, self.title_sig) <= 6.0
+        self.title_sig = res.title_sig
+        vendor = self._vendor_from_title(res)
+        if vendor is not None:
+            if not similar(vendor, self.vendor, 0.8):
+                self.set_vendor(vendor)
+        elif not same_room:
+            self.set_vendor("")
+            self._hint("이 대화방 이름은 글자로 읽지 못했습니다. 위의 [거래처 변경]을 눌러 "
+                       "이름을 한 번만 정해 주세요. 다음부터는 자동으로 바뀝니다.")
+        bubbles = res.bubbles
         key = self.vendor or "_미지정"
         seen = self.session_seen.setdefault(key, [])
-        known = [h["zh"] for h in self.history if h["side"] == "in"] + seen
+        # 이미 번역한 업체 메시지 + 내가 보낸 중국어(입력창에 붙여넣은 글을 업체 글로 착각하지 않게)
+        known = [h["zh"] for h in self.history] + seen
         all_new = find_new_incoming(bubbles, known, max_new=10_000)
         to_translate = all_new[-self.cfg.get("max_new_per_scan", 3):]
         seen.extend(all_new)  # 오래된 것은 번역하지 않고 '본 것'으로 처리
@@ -334,7 +384,7 @@ class App:
                 item = self.q.get_nowait()
                 kind = item[0]
                 if kind == "scan":
-                    self._handle_scan(item[1], item[2])
+                    self._handle_scan(item[1])
                 elif kind == "done":
                     self._handle_done(*item[1:])
                     self.status_var.set("")
@@ -358,9 +408,14 @@ class App:
             found = win_window.find_wechat()
             if found:
                 _, (l, t, r, b) = found
-                w = self.cfg["panel_width"]
+                w = self.pw
                 sw, _ = win_window.screen_size()
-                x = r if r + w <= sw else max(0, l - w)
+                if r + w <= sw:
+                    x = r                 # 위챗 오른쪽
+                elif l - w >= 0:
+                    x = l - w             # 오른쪽에 자리가 없으면 왼쪽
+                else:
+                    x = 0                 # 양쪽 다 자리가 없으면 화면 왼쪽 끝 (위챗 대화방 목록 위에 겹침)
                 geom = f"{w}x{b - t}+{x}+{t}"
                 if geom != self._last_geom:
                     self.root.geometry(geom)

@@ -12,7 +12,12 @@ from pathlib import Path
 
 APP_NAME = "ManosWeChatTranslator"
 
+CONFIG_VERSION = 2
+# 화면 인식 관련 값은 버전이 바뀌면 새 기본값으로 다시 맞춤
+LAYOUT_KEYS = ("chat_left_ratio", "title_height", "input_height", "ocr_min_score", "ocr_min_height")
+
 DEFAULTS = {
+    "config_version": CONFIG_VERSION,
     "api_key": "",
     "model": "claude-sonnet-5-5",
     "effort": "low",
@@ -26,10 +31,14 @@ DEFAULTS = {
     "panel_width": 400,
     "poll_seconds": 1.5,
     # 위챗 창 안에서 '대화 영역'의 위치 (위챗 창 기준, 픽셀). 화면에 맞춰 조정 가능.
-    "chat_left_ratio": 0.30,
-    "title_height": 64,
-    "input_height": 190,
-    "ocr_min_score": 0.6,
+    # (0 = 자동. 대화 영역 왼쪽 끝은 대화방 목록의 날짜 위치로 자동으로 찾고, 못 찾으면 이 비율 사용)
+    "chat_left_ratio": 0.41,
+    "title_height": 0,
+    "input_height": 0,
+    "ocr_min_score": 0.65,
+    "ocr_min_height": 12,
+    # 한국어 메모 이름처럼 글자로 못 읽는 대화방 제목 → 대표님이 정한 거래처 이름
+    "title_map": [],
     "max_new_per_scan": 3,
     "history_for_prompt": 12,
     "quick_phrases": [
@@ -72,7 +81,12 @@ def load_config() -> dict:
     p = config_path()
     if p.exists():
         try:
-            cfg.update(json.loads(p.read_text(encoding="utf-8")))
+            saved = json.loads(p.read_text(encoding="utf-8"))
+            if saved.get("config_version", 1) < CONFIG_VERSION:
+                for k in LAYOUT_KEYS:
+                    saved.pop(k, None)
+                saved["config_version"] = CONFIG_VERSION
+            cfg.update(saved)
         except (OSError, ValueError):
             pass
     return cfg

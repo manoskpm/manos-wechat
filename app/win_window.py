@@ -60,6 +60,9 @@ if sys.platform == "win32":
     def toplevel_of(hwnd):
         return user32.GetAncestor(hwnd, 2)  # GA_ROOT
 
+    def window_rect(hwnd):
+        return _rect(hwnd) if hwnd else None
+
     def screen_size():
         return user32.GetSystemMetrics(0), user32.GetSystemMetrics(1)
 
@@ -69,6 +72,9 @@ else:  # 개발용(윈도우가 아닌 환경)에서는 아무것도 찾지 않�
 
     def toplevel_of(hwnd):
         return hwnd
+
+    def window_rect(hwnd):
+        return None
 
     def find_wechat():
         return None

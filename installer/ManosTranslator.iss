@@ -22,42 +22,16 @@ WizardStyle=modern
 CloseApplications=yes
 UninstallDisplayName=발주 번역기 (위챗)
 UninstallDisplayIcon={app}\ManosTranslator.exe
+SetupIconFile=..\assets\icon.ico
 
 [Files]
 Source: "..\dist\ManosTranslator.exe"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-Name: "{userdesktop}\위챗+번역기"; Filename: "{app}\ManosTranslator.exe"; Parameters: "--with-wechat"; IconFilename: "{code:WeChatIcon}"
-Name: "{userprograms}\발주 번역기\위챗+번역기"; Filename: "{app}\ManosTranslator.exe"; Parameters: "--with-wechat"; IconFilename: "{code:WeChatIcon}"
+Name: "{userdesktop}\위챗+번역기"; Filename: "{app}\ManosTranslator.exe"; Parameters: "--with-wechat"; IconFilename: "{app}\ManosTranslator.exe"
+Name: "{userprograms}\발주 번역기\위챗+번역기"; Filename: "{app}\ManosTranslator.exe"; Parameters: "--with-wechat"; IconFilename: "{app}\ManosTranslator.exe"
 Name: "{userprograms}\발주 번역기\번역기만 켜기"; Filename: "{app}\ManosTranslator.exe"
 Name: "{userprograms}\발주 번역기\발주 번역기 삭제"; Filename: "{uninstallexe}"
 
 [Run]
 Filename: "{app}\ManosTranslator.exe"; Parameters: "--with-wechat"; Description: "지금 위챗과 번역기 켜기"; Flags: nowait postinstall skipifsilent
-
-[Code]
-{ 바로가기 아이콘을 위챗 아이콘으로 (위챗을 못 찾으면 번역기 아이콘) }
-function WeChatIcon(Param: String): String;
-var
-  P: String;
-begin
-  Result := ExpandConstant('{app}\ManosTranslator.exe');
-  if RegQueryStringValue(HKCU, 'Software\Tencent\Weixin', 'InstallPath', P) and FileExists(P + '\Weixin.exe') then
-  begin
-    Result := P + '\Weixin.exe';
-    Exit;
-  end;
-  if RegQueryStringValue(HKCU, 'Software\Tencent\WeChat', 'InstallPath', P) and FileExists(P + '\WeChat.exe') then
-  begin
-    Result := P + '\WeChat.exe';
-    Exit;
-  end;
-  P := ExpandConstant('{commonpf64}\Tencent\Weixin\Weixin.exe');
-  if FileExists(P) then begin Result := P; Exit; end;
-  P := ExpandConstant('{commonpf32}\Tencent\Weixin\Weixin.exe');
-  if FileExists(P) then begin Result := P; Exit; end;
-  P := ExpandConstant('{commonpf32}\Tencent\WeChat\WeChat.exe');
-  if FileExists(P) then begin Result := P; Exit; end;
-  P := ExpandConstant('{commonpf64}\Tencent\WeChat\WeChat.exe');
-  if FileExists(P) then begin Result := P; Exit; end;
-end;

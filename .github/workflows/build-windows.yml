@@ -37,6 +37,7 @@ jobs:
         run: >
           pyinstaller --noconfirm --onefile --windowed --name ManosTranslator
           --collect-all rapidocr_onnxruntime --collect-binaries onnxruntime
+          --icon assets/icon.ico --add-data "assets/icon.ico;assets"
           run.py
 
       - name: Build installer

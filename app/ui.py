@@ -38,6 +38,13 @@ class App:
         self._hidden = False
         self.root = tk.Tk()
         self.root.title(f"발주 번역기 v{VERSION}")
+        from . import shortcuts
+        if sys.platform == "win32" and shortcuts.icon_path():
+            try:
+                self.root.iconbitmap(default=shortcuts.icon_path())
+            except tk.TclError:
+                pass
+        threading.Thread(target=shortcuts.fix_shortcut_icons, daemon=True).start()
         self.root.configure(bg=BG)
         self.root.attributes("-topmost", True)
         # 화면 배율(125%, 150%)에 맞춰 패널 폭도 키움

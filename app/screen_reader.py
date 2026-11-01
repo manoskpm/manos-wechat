@@ -33,6 +33,7 @@ class ScanResult:
     frame_rgb: tuple = ()           # 위챗 바깥 테두리 색 (반투명이라 바탕화면에 따라 바뀜)
     chat_bg: tuple = ()             # 위챗 대화 영역 바탕색
     timing: dict = field(default_factory=dict)   # 걸린 시간 기록 (속도 확인용)
+    chat_right: float = 0           # 대화 영역 오른쪽 끝
 
 
 def image_signature(img, size=(48, 48)):
@@ -404,10 +405,19 @@ class ScreenReader:
         S = lambda v: int(round(v * scale))
         for it in items:
             it.y0, it.y1, it.x0, it.x1 = S(it.y0), S(it.y1), S(it.x0), S(it.x1)
+            if "line_h" in it.extra:
+                it.extra["line_h"] *= scale
+            if "avatar" in it.extra:   # 프로필 사진은 작게 잘라 둠 (번역창에서 위챗처럼 보이도록)
+                box = tuple(S(v) for v in it.extra["avatar"])
+                buf = io.BytesIO()
+                full.crop(box).save(buf, format="PNG")
+                it.extra["avatar"] = box
+                it.extra["avatar_png"] = buf.getvalue()
         res.items = items
         res.chat_left = res.chat_left * scale
         res.title_h, res.band_h = S(res.title_h), S(res.band_h)
         res.chat_top, res.chat_bottom, res.win_h = res.title_h, S(bottom), full.height
+        res.chat_right = chat_right * scale
         # 한글 이름은 패널이 따로(기다리지 않고) Claude 로 읽음 → 제목 그림만 넘김
         title = full.crop((int(res.chat_left), res.band_h, int(min(full.width, res.chat_left + 500 * scale)),
                            res.title_h))

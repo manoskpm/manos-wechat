@@ -15,7 +15,7 @@ import traceback
 import uuid
 
 from PySide6.QtCore import QPoint, QRect, QSize, Qt, QTimer
-from PySide6.QtGui import QAction, QFont, QGuiApplication, QIcon
+from PySide6.QtGui import QAction, QColor, QFont, QGuiApplication, QIcon
 from PySide6.QtWidgets import (QApplication, QFileDialog, QFrame, QHBoxLayout, QInputDialog, QLabel, QLayout,
                                QLineEdit, QMenu, QMessageBox, QPlainTextEdit, QPushButton, QVBoxLayout, QWidget)
 
@@ -120,8 +120,52 @@ class FlowLayout(QLayout):
         return y + line_h - rect.y()
 
 
+class Bubble(QLabel):
+    """위챗 말풍선 모양: 둥근 네모 + 프로필 사진 쪽을 가리키는 작은 꼬리."""
+    TAIL = 6
+
+    def __init__(self, parent, bg: str, fg: str, tail: str | None, tail_y: float, border: str = ""):
+        super().__init__(parent)
+        self._bg, self._tail, self._tail_y, self._border = QColor(bg), tail, tail_y, border
+        self.setStyleSheet(f"color: {fg}; background: transparent;")
+
+    def paintEvent(self, e):
+        from PySide6.QtCore import QPointF, QRectF
+        from PySide6.QtGui import QPainter, QPainterPath, QPen, QPolygonF
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        r = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        T = self.TAIL
+        if self._tail == "left":
+            r.adjust(T, 0, 0, 0)
+        elif self._tail == "right":
+            r.adjust(0, 0, -T, 0)
+        path = QPainterPath()
+        path.addRoundedRect(r, 4, 4)
+        if self._tail:
+            ty = max(10.0, min(r.height() - 10.0, self._tail_y))
+            if self._tail == "left":
+                tri = QPolygonF([QPointF(r.left() + 1, ty - 6), QPointF(r.left() - T + 1, ty),
+                                 QPointF(r.left() + 1, ty + 6)])
+            else:
+                tri = QPolygonF([QPointF(r.right() - 1, ty - 6), QPointF(r.right() + T - 1, ty),
+                                 QPointF(r.right() - 1, ty + 6)])
+            tp = QPainterPath()
+            tp.addPolygon(tri)
+            path = path.united(tp)
+        p.fillPath(path, self._bg)
+        if self._border:
+            pen = QPen(QColor("#cfcfcf"))
+            pen.setStyle(Qt.DashLine if self._border == "dash" else Qt.SolidLine)
+            p.setPen(pen)
+            p.drawPath(path)
+        p.end()
+        super().paintEvent(e)
+
+
 class MirrorView(QWidget):
-    """거울 화면: 위챗 화면의 덩어리마다 같은 높이에 번역 박스를 놓음 (스크롤도 위챗을 그대로 따라감)."""
+    """거울 화면: 위챗 화면의 덩어리마다 같은 높이·같은 자리에 번역 말풍선을 놓음
+    (스크롤도 위챗을 그대로 따라감). 글자 크기·말풍선 꼬리·프로필 사진까지 위챗과 같게."""
 
     def __init__(self, on_click_entry):
         super().__init__()
@@ -139,7 +183,8 @@ class MirrorView(QWidget):
         self._flash_timer = QTimer(self)
         self._flash_timer.setSingleShot(True)
         self._flash_timer.timeout.connect(self._flash.hide)
-        self._last = ([], "")
+        self._last = ([], "", 14)
+        self._avatar_cache: dict = {}
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
@@ -156,8 +201,8 @@ class MirrorView(QWidget):
         self._flash.show()
         self._flash_timer.start(8000)
 
-    def show_items(self, views: list, empty_text: str = ""):
-        self._last = (views, empty_text)
+    def show_items(self, views: list, empty_text: str = "", base: int = 14):
+        self._last = (views, empty_text, base)
         for w in self._widgets:
             w.deleteLater()
         self._widgets = []
@@ -167,90 +212,122 @@ class MirrorView(QWidget):
             self._empty.show()
             return
         self._empty.hide()
-        width, margin = self.width(), 12
-        maxw = int(width * 0.8)
+        width = self.width()
         for v in views:
             y, h = int(round(v["y"])), max(18, int(round(v["h"])))
             if y + h < 0 or y > self.height():
                 continue  # 위챗 화면에서도 안 보이는 부분
-            lab = self._make(v, h, maxw)
+            off = int(round(v.get("off") or 12))
+            av = v.get("avatar")
+            if av:
+                self._add_avatar(av, v["side"], width)
+            # (한국어 번역은 중국어보다 길어서, 반대쪽 끝 가까이까지 넓게 씀)
+            maxw = max(80, width - off - 16)
+            lab = self._make(v, h, maxw, base)
             if lab is None:
                 continue
             if v["kind"] in ("time", "notice"):
                 x = (width - lab.width()) // 2
             elif v["side"] == "out":
-                x = width - margin - lab.width()
+                x = width - off - lab.width() + (Bubble.TAIL if isinstance(lab, Bubble) else 0)
             else:
-                x = margin
+                x = off - (Bubble.TAIL if isinstance(lab, Bubble) else 0)
             lab.move(x, y + int(lab.property("dy") or 0))
             lab.show()
             self._widgets.append(lab)
         self._flash.raise_()
 
-    def _make(self, v: dict, h: int, maxw: int):
+    def _add_avatar(self, av: dict, side: str, width: int):
+        from PySide6.QtGui import QPixmap
+        size = max(16, int(round(av["size"])))
+        key = (av["png"], size)
+        pm = self._avatar_cache.get(key)
+        if pm is None:
+            pm = QPixmap()
+            pm.loadFromData(av["png"])
+            pm = pm.scaled(size, size, Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
+            if len(self._avatar_cache) > 50:
+                self._avatar_cache.clear()
+            self._avatar_cache[key] = pm
+        lab = QLabel(self)
+        lab.setPixmap(pm)
+        lab.setFixedSize(size, size)
+        off = int(round(av["off"]))
+        lab.move(off if side == "in" else width - off - size, int(round(av["y"])))
+        lab.show()
+        self._widgets.append(lab)
+
+    def _make(self, v: dict, h: int, maxw: int, base: int):
+        from PySide6.QtGui import QFontMetrics
         kind = v["kind"]
+        text = v.get("text", "")
         if kind in ("photo", "video", "sticker"):
             # 사진·영상·이모티콘은 위챗 창에 그대로 보이므로 같은 크기의 빈 네모 칸에 표시만
             lab = QLabel(self)
-            lab.setText(v.get("text", "") + "\n위챗 참고")
-            lab.setFont(self._font(12))
+            lab.setText(text + "\n위챗 참고")
+            lab.setFont(self._font(max(11, base - 3)))
             lab.setAlignment(Qt.AlignCenter)
             lab.setFixedSize(int(min(maxw, max(60, v["w"]))), h)
             lab.setStyleSheet("background: transparent; color: #a3a3a3; border: 1px solid #e3e3e3;"
-                              "border-radius: 6px;")
+                              "border-radius: 4px;")
             return lab
-        text = v.get("text", "")
-        lab = QLabel(self)
         if kind in ("time", "notice"):
+            lab = QLabel(self)
             lab.setText(text)
-            lab.setFont(self._font(12))
+            lab.setFont(self._font(max(10, base - 4)))
             lab.setStyleSheet("color: #a3a3a3; background: transparent;")
             lab.adjustSize()
             # 시간 줄은 위챗에서 높이가 낮아 글자가 잘릴 수 있음 → 최소 20 픽셀, 위챗 줄 가운데에 맞춤
             hh = max(h, 20)
-            lab.setFixedSize(lab.width() + 8, hh)
+            lab.setFixedSize(min(self.width() - 20, lab.width() + 8), hh)
             lab.setAlignment(Qt.AlignCenter)
             lab.setProperty("dy", -(hh - h) // 2)
             return lab
+        border = ""
         if kind == "transfer":
             bg, fg = "#fa9d3b", "white"
-        elif v["side"] == "out" and not v.get("color"):
-            bg, fg = BUBBLE_OUT, TEXT
         elif kind == "unknown":
-            bg, fg = "#f3f3f3", "#9a9a9a"
+            bg, fg, border = "#f3f3f3", "#9a9a9a", "dash"
         else:
             c = v.get("color")
-            bg, fg = ("#%02x%02x%02x" % tuple(c[:3]) if c else "#ffffff"), TEXT
+            if c:
+                bg = "#%02x%02x%02x" % tuple(c[:3])
+            else:
+                bg = BUBBLE_OUT if v["side"] == "out" else "#ffffff"
+            fg = TEXT
         if v.get("pending"):
             fg = "#9a9a9a"
             text = text or "번역 중…"
         if v.get("nuance"):
             text = text + "  💡"
-        # 위챗 말풍선 높이에 맞도록 글자 크기를 맞추고, 그래도 넘치면 … 으로 줄임 (마우스를 올리면 전체)
-        from PySide6.QtGui import QFontMetrics
-        inner_w = maxw - 24
-        size = 14
-        for size in (14, 13, 12, 11, 10):
+        tail = "right" if v["side"] == "out" else "left"
+        pad = max(8, round(base * 0.75))
+        inner_w = maxw - Bubble.TAIL - 2 * pad
+        # 위챗 말풍선 높이에 맞도록 글자 크기를 맞추고(위챗 글자 크기부터 3단계까지), 그래도 넘치면 …
+        size = base
+        for size in range(base, max(10, base - 4) - 1, -1):
             fm = QFontMetrics(self._font(size))
             r = fm.boundingRect(QRect(0, 0, inner_w, 10000), Qt.TextWordWrap, text)
-            if r.height() + 12 <= h:
+            if r.height() + 8 <= h:
                 break
         fm = QFontMetrics(self._font(size))
         shown = text
         while len(shown) > 1 and fm.boundingRect(QRect(0, 0, inner_w, 10000), Qt.TextWordWrap,
-                                                 shown + "…").height() + 12 > h:
+                                                 shown + "…").height() + 8 > h:
             shown = shown[:-2]
         if shown != text:
             shown = shown + "…"
-        one_line = fm.horizontalAdvance(shown)
-        w = min(maxw, max(36, one_line + 26))
+        r = fm.boundingRect(QRect(0, 0, inner_w, 10000), Qt.TextWordWrap, shown)
+        w = min(maxw, max(r.width() + 2 * pad + Bubble.TAIL + 2, 40))
+        lab = Bubble(self, bg, fg, tail, v.get("tail_y") or h / 2, border)
         lab.setText(shown)
         lab.setWordWrap(True)
         lab.setFont(self._font(size))
-        lab.setFixedSize(w, h)
+        lab.setFixedSize(int(w), h)
         lab.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
-        border = "border: 1px dashed #cfcfcf;" if kind == "unknown" else ""
-        lab.setStyleSheet(f"background: {bg}; color: {fg}; border-radius: 6px; padding: 0px 10px; {border}")
+        lm = pad + (Bubble.TAIL if tail == "left" else 0)
+        rm = pad + (Bubble.TAIL if tail == "right" else 0)
+        lab.setContentsMargins(lm, 0, rm, 0)
         tip = v.get("text", "")
         if v.get("nuance"):
             tip += "\n💡 " + v["nuance"]
@@ -623,10 +700,21 @@ class Panel(QWidget):
             return
         dpr = self.devicePixelRatioF() or 1.0
         offset = self.mirror.mapTo(self, QPoint(0, 0)).y()
+        cl = res.chat_left or 0
+        cr = res.chat_right or max([it.x1 for it in res.items] + [cl + 400])
+        # 글자 크기: 위챗 말풍선 글자 줄 높이로 계산 (위챗과 같은 크기로 보이게)
+        hs = sorted(it.extra["line_h"] for it in res.items if it.kind == "text" and "line_h" in it.extra)
+        base = max(11, min(24, round(hs[len(hs) // 2] / dpr * 0.93))) if hs else 14
         views = []
         for it in res.items:
             v = {"kind": it.kind, "side": it.side, "y": it.y0 / dpr - offset, "h": (it.y1 - it.y0) / dpr,
-                 "w": (it.x1 - it.x0) / dpr, "png": it.png, "color": it.extra.get("bg")}
+                 "w": (it.x1 - it.x0) / dpr, "color": it.extra.get("bg"),
+                 "off": ((it.x0 - cl) if it.side != "out" else (cr - it.x1)) / dpr}
+            if "avatar_png" in it.extra and it.kind not in ("time", "notice"):
+                ax0, ay0, ax1, ay1 = it.extra["avatar"]
+                v["avatar"] = {"png": it.extra["avatar_png"], "size": (ax1 - ax0) / dpr, "y": ay0 / dpr - offset,
+                               "off": ((ax0 - cl) if it.side != "out" else (cr - ax1)) / dpr}
+                v["tail_y"] = ((ay0 + ay1) / 2 - it.y0) / dpr   # 꼬리는 프로필 사진 가운데 높이
             if it.kind == "text":
                 e = self._entry_for(it.side, it.text)
                 v.update(text=e.get("ko") or ("번역 중…" if e.get("pending") else ""), entry=e,
@@ -664,7 +752,10 @@ class Panel(QWidget):
             else:
                 v["text"] = "⚠ 읽지 못함 — Ctrl+C로 넣어 주세요"
             views.append(v)
-        self.mirror.show_items(views)
+        self.mirror.show_items(views, "", base)
+        if getattr(self, "_title_px", 0) != base:   # 제목 글자도 위챗 제목과 같은 크기로
+            self._title_px = base
+            self.vendor_lbl.setStyleSheet(f"font-size: {base}px; color: {TEXT};")
         if self._dirty:
             self._dirty = False
             self._save()

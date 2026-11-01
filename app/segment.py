@@ -119,6 +119,7 @@ def segment_chat(img, lines: list[Line], chat_left: float, chat_right: float, to
         # 프로필 사진(정사각형, 창 가장자리 쪽)은 빼고 내용 부분만
         content = []
         avatar_side = None
+        avatar_box = None
         segs = [sg for sg in segs if sg[1] - sg[0] > 3] or segs   # 1~3픽셀짜리 세로 선 조각은 무시
         for cx0, cx1 in segs:
             w = cx1 - cx0
@@ -130,6 +131,9 @@ def segment_chat(img, lines: list[Line], chat_left: float, chat_right: float, to
             in_avatar_col = w <= 80 and (cx1 <= width * 0.14 or cx0 >= width * 0.86)
             if (square and at_edge or in_avatar_col) and len(segs) > 1:
                 avatar_side = "in" if cx0 <= width * 0.18 else "out"
+                if square:
+                    ays = np.where(sub.any(axis=1))[0]
+                    avatar_box = (x0 + cx0, top + ry0 + int(ays[0]), x0 + cx1, top + ry0 + int(ays[-1]) + 1)
                 continue
             content.append((cx0, cx1))
         if not content:
@@ -215,6 +219,10 @@ def segment_chat(img, lines: list[Line], chat_left: float, chat_right: float, to
             it.side = avatar_side or ("in" if gap_l < gap_r else "out")
         if it.kind in ("text", "file", "link", "voice"):
             it.extra["bg"] = mode   # 위챗 말풍선 색 그대로 (업체 회색/흰색, 내 초록)
+        if inside:
+            it.extra["line_h"] = float(np.median([l.y1 - l.y0 for l in inside]))   # 위챗 글자 크기
+        if avatar_box and it.side in ("in", "out"):
+            it.extra["avatar"] = avatar_box
         items.append(it)
     return items
 

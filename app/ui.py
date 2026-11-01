@@ -8,6 +8,7 @@ import sys
 import threading
 import time
 import tkinter as tk
+import traceback
 from tkinter import messagebox, simpledialog
 
 from . import config as C
@@ -56,17 +57,47 @@ class App:
             self.last_clip = self.root.clipboard_get()
         except tk.TclError:
             pass
-        self._ensure_api_key()
         self.set_vendor("")
+        self.log_path = C.data_dir() / "log.txt"
+        self.status_var.set("시작 중...")
 
         self.reader = ScreenReader(self.cfg, self._on_scan_thread, self._own_hwnd,
-                                   log_path=C.data_dir() / "log.txt")
+                                   log_path=self.log_path)
         self.reader.start()
 
-        self.root.after(100, self._drain_queue)
-        self.root.after(500, self._dock_tick)
-        self.root.after(800, self._clipboard_tick)
-        self.root.after(1000, self._status_tick)
+        # 반복 작업을 먼저 시작하고, API 키 확인은 그 다음에 (창이 멈추지 않게)
+        self._every(100, self._drain_queue)
+        self._every(500, self._dock_tick)
+        self._every(800, self._clipboard_tick)
+        self._every(1000, self._status_tick)
+        self.root.after(300, self._ensure_api_key)
+
+    # ------------------------------------------------------------ 공통 도구
+    def _every(self, ms, fn):
+        """fn 을 ms 마다 실행. 한 번 오류가 나도 멈추지 않고 기록만 남김."""
+        def run():
+            try:
+                fn()
+            except Exception:
+                self._write_log(f"{fn.__name__} 오류\n{traceback.format_exc()}")
+            finally:
+                self.root.after(ms, run)
+        self.root.after(ms, run)
+
+    def _write_log(self, msg):
+        try:
+            with open(self.log_path, "a", encoding="utf-8") as fp:
+                fp.write(time.strftime("%Y-%m-%d %H:%M:%S ") + msg + "\n")
+        except OSError:
+            pass
+
+    def _dialog(self, fn, *args, **kwargs):
+        """질문 창이 '항상 위' 패널 뒤에 숨지 않도록 잠시 패널의 '항상 위'를 끔."""
+        self.root.attributes("-topmost", False)
+        try:
+            return fn(*args, parent=self.root, **kwargs)
+        finally:
+            self.root.attributes("-topmost", True)
 
     # ------------------------------------------------------------ 화면 구성
     def _build(self):
@@ -163,7 +194,7 @@ class App:
     def _ask_api_key(self, first=False):
         msg = ("Claude API 키를 붙여넣어 주세요.\n(sk-ant- 로 시작합니다. 이 컴퓨터에만 저장됩니다)"
                if first else "새 Claude API 키를 붙여넣어 주세요.")
-        key = simpledialog.askstring("API 키", msg, parent=self.root, show="*")
+        key = self._dialog(simpledialog.askstring, "API 키", msg, show="*")
         if key and key.strip():
             self.cfg["api_key"] = key.strip()
             C.save_config(self.cfg)
@@ -186,10 +217,12 @@ class App:
     def _save_debug(self):
         p = C.data_dir() / "screen_check.png"
         if self.reader.save_debug_image(p):
-            messagebox.showinfo("저장됨", f"저장했습니다:\n{p}\n\n이 사진을 비서실장에게 보내 주시면 화면 인식을 맞춰 드립니다.")
+            self._dialog(messagebox.showinfo, "저장됨",
+                         f"저장했습니다:\n{p}\n\n이 사진을 비서실장에게 보내 주시면 화면 인식을 맞춰 드립니다.")
             self._open(C.data_dir())
         else:
-            messagebox.showinfo("아직 없음", "아직 읽은 화면이 없습니다. 위챗 대화방을 열어 두고 잠시 후 다시 눌러 주세요.")
+            self._dialog(messagebox.showinfo, "아직 없음",
+                         "위챗 창을 찾지 못했습니다. 위챗을 켜 두고 다시 눌러 주세요.")
 
     def _save_tone(self):
         self.cfg["tone"] = self.tone_var.get()
@@ -202,10 +235,10 @@ class App:
         C.save_config(self.cfg)
 
     def _ask_vendor(self):
-        name = simpledialog.askstring(
-            "거래처", "지금 위챗에 열린 대화방의 거래처 이름을 입력하세요.\n"
+        name = self._dialog(
+            simpledialog.askstring, "거래처", "지금 위챗에 열린 대화방의 거래처 이름을 입력하세요.\n"
             "(한 번 정하면 다음부터 이 대화방을 열 때 자동으로 바뀝니다)",
-            parent=self.root, initialvalue=self.vendor)
+            initialvalue=self.vendor)
         if name is None or not name.strip():
             return
         name = name.strip()
@@ -395,7 +428,6 @@ class App:
                     self.status_var.set("")
         except queue.Empty:
             pass
-        self.root.after(100, self._drain_queue)
 
     def _own_hwnd(self):
         try:
@@ -420,7 +452,7 @@ class App:
                 if geom != self._last_geom:
                     self.root.geometry(geom)
                     self._last_geom = geom
-        self.root.after(500, self._dock_tick)
+                    self._write_log(f"dock wechat={(l, t, r, b)} screen={sw} panel={geom}")
 
     def _clipboard_tick(self):
         if self.cfg.get("clipboard_watch", True):
@@ -435,12 +467,10 @@ class App:
                     if not any(similar(clip, k) for k in known):
                         self.session_seen.setdefault(self.vendor or "_미지정", []).append(clip)
                         self._translate_async("in", clip.strip())
-        self.root.after(800, self._clipboard_tick)
 
     def _status_tick(self):
         if not self.status_var.get().startswith("번역"):
             self.status_var.set(self.reader.status)
-        self.root.after(1000, self._status_tick)
 
     def quit(self):
         self.reader.stop()

@@ -103,7 +103,8 @@ def parse_chat(lines: list[Line], width: float, height: float,
     for l in body:
         cx = (l.x0 + l.x1) / 2
         # 가운데 정렬된 짧은 글 = 시간 표시나 시스템 안내 → 제외
-        if abs(cx - mid) < width * 0.12 and (l.x1 - l.x0) < width * 0.45:
+        # (말풍선 색으로 판단할 수 있으면 그쪽을 씀: 좁은 화면에서는 말풍선도 가운데 가까이 옴)
+        if side_fn is None and abs(cx - mid) < width * 0.12 and (l.x1 - l.x0) < width * 0.45:
             prev = None
             continue
         if TIME_RE.search(l.text):
@@ -118,7 +119,7 @@ def parse_chat(lines: list[Line], width: float, height: float,
             bubbles[-1].y1 = l.y1
         else:
             side = side_fn(l) if side_fn else None
-            if side == "photo":  # 사진 속 글자는 메시지가 아님
+            if side in ("photo", "plain"):  # 사진 속 글자, 말풍선 없는 안내 글은 메시지가 아님
                 prev = None
                 continue
             if side is None:

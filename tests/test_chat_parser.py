@@ -68,7 +68,9 @@ def test_real_wechat_screenshot():
     result, _ = RapidOCR()(np.array(img))
     res = analyze_window(img, result, dict(DEFAULTS))
     assert 360 <= res.chat_left <= 390  # 대화방 목록과 대화 영역의 경계 (약 375px)
-    assert [(b.side, b.text) for b in res.bubbles if b.side == "in"] == [("in", "物流公司让今天送货")]
+    # 중국어가 들어 있는 업체 메시지만 비교 (숫자만 있는 글은 번역 대상에서 원래 제외됨)
+    from app.chat_parser import CJK_RE
+    assert [b.text for b in res.bubbles if b.side == "in" and CJK_RE.search(b.text)] == ["物流公司让今天送货"]
     assert all(b.side == "out" for b in res.bubbles if "样品" in b.text)
 
 
@@ -146,3 +148,23 @@ def test_merge_duplicate_short_message_and_card():
                                           _b("in", "妖野向MANOS分享销售单单号:A8012")])
     assert [h["zh"] for h in hist] == ["好的", "发货了吗", "好的"]
     assert [a["zh"] for a in auto] == ["好的"]
+
+
+def test_real_wechat_narrow_layout():
+    """실제 화면 3: 위챗 4.2 좁은 화면(대화방 목록 없음)에서도 대화 영역과 업체 메시지를 찾음."""
+    pytest.importorskip("rapidocr_onnxruntime")
+    path = Path(__file__).parent / "fixtures" / "real_wechat3.png"
+    if not path.exists():
+        pytest.skip("real_wechat3.png 없음")
+    import numpy as np
+    from PIL import Image
+    from rapidocr_onnxruntime import RapidOCR
+
+    from app.config import DEFAULTS
+    from app.screen_reader import analyze_window
+
+    img = Image.open(path).convert("RGB")
+    result, _ = RapidOCR()(np.array(img))
+    res = analyze_window(img, result, dict(DEFAULTS))
+    assert 70 <= res.chat_left <= 85
+    assert [b.text for b in res.bubbles if b.side == "in"] == ["物流公司让今天送货"]

@@ -358,7 +358,8 @@ class App:
     def set_vendor(self, vendor: str):
         self.vendor = vendor
         self.vendor_var.set(vendor or "위챗 대화방을 클릭하세요")
-        self.history = C.load_history(vendor or "_미지정")
+        # 대화방을 아직 못 읽었을 때는 예전 '미지정' 기록을 보여주지 않음
+        self.history = C.load_history(vendor) if vendor else []
         for h in self.history:
             h.setdefault("id", uuid.uuid4().hex)
         self._render_all()

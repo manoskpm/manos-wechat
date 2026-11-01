@@ -69,6 +69,42 @@ def bubble_side_by_color(img, line, offset_x: float, bg=None):
     r = sum(p[0] for p in core) / len(core)
     g = sum(p[1] for p in core) / len(core)
     b = sum(p[2] for p in core) / len(core)
+    if _close((r, g, b), bg, 4):
+        return "plain"  # 말풍선 없이 배경에 바로 쓴 글 (시간 표시, 안내 문구)
+    # 오른쪽 여백도 같은 말풍선 색이 고르게 이어지다 배경으로 끝나야 진짜 말풍선
+    # (업체가 보낸 캡처 사진 속 작은 말풍선 글자를 걸러냄)
+    right = []
+    x = int(line.x1 + offset_x) + 2
+    while x < rgb.width - 1 and len(right) <= int(rgb.width * 0.8):
+        p = rgb.getpixel((x, y))
+        if _close(p, bg) and len(right) >= 2:
+            break
+        right.append(p)
+        x += 1
+    else:
+        return "photo"
+    rcore = right[1:-1] or right
+    if max(max(p[c] for p in rcore) - min(p[c] for p in rcore) for c in range(3)) > 24:
+        return "photo"
+    rmean = tuple(sum(p[c] for p in rcore) / len(rcore) for c in range(3))
+    if not _close(rmean, (r, g, b), 12):
+        return "photo"
+    # 왼쪽 여백 세로줄도 위아래로 같은 색이 이어지다 배경으로 끝나야 함 (사진 테두리 걸러냄)
+    col = int(line.x0 + offset_x) - 4
+    for step in (-1, 1):
+        yy, n = y, 0
+        while 0 < yy < rgb.height - 1:
+            p = rgb.getpixel((col, yy))
+            if _close(p, bg):
+                break
+            if not _close(p, (r, g, b), 14):
+                return "photo"
+            yy += step
+            n += 1
+            if n > h * 15:
+                return "photo"
+        else:
+            return "photo"
     if g > r + 25 and g > b + 25:
         return "out"
     if abs(r - g) < 15 and abs(g - b) < 15:
@@ -117,11 +153,33 @@ def detect_input_top(img, chat_left: float) -> int | None:
     return _find_divider(img, chat_left, int(img.height * 0.6), int(img.height * 0.97))
 
 
+def detect_chat_left_by_color(img) -> float | None:
+    """대화 영역 왼쪽 끝 찾기 (색 기준): 왼쪽 아이콘 줄이나 대화방 목록이 끝나고
+    대화 배경색이 시작되는 세로 경계. 위챗을 좁게 써서 대화방 목록이 없는 화면에서도 동작."""
+    from collections import Counter
+    gray = img.convert("L")
+    w, h = gray.size
+    ys = range(int(h * 0.15), int(h * 0.85), 5)
+
+    def mode(x):
+        c = Counter(gray.getpixel((x, y)) for y in ys).most_common(1)[0]
+        return c[0], c[1] / len(ys)
+
+    bg = mode(int(w * 0.8))[0]
+    modes = [mode(x) for x in range(int(w * 0.65))]
+    for x in range(30, len(modes) - 14):
+        near_bg = lambda m: abs(m[0] - bg) <= 2 and m[1] >= 0.6
+        if near_bg(modes[x]) and not near_bg(modes[x - 1]) and all(near_bg(m) for m in modes[x:x + 12]):
+            return float(x)
+    return None
+
+
 def analyze_window(img, ocr_result, cfg: dict, last_chat_left: float | None = None) -> ScanResult:
     """위챗 창 전체 사진 + 글자 인식 결과 → 거래처 이름과 말풍선."""
     w, h = img.width, img.height
     lines = to_lines(ocr_result, cfg["ocr_min_score"], cfg.get("ocr_min_height", 12))
-    chat_left = detect_chat_left(lines, w) or last_chat_left or w * cfg["chat_left_ratio"]
+    chat_left = (detect_chat_left(lines, w) or detect_chat_left_by_color(img)
+                 or last_chat_left or w * cfg["chat_left_ratio"])
     title_h = cfg.get("title_height") or detect_header_bottom(img, chat_left) or int(h * 0.09)
     input_top = detect_input_top(img, chat_left)
     input_h = cfg.get("input_height") or (h - input_top + 4 if input_top else int(h * 0.24))

@@ -25,6 +25,8 @@ if sys.platform == "win32":
     user32.GetAncestor.argtypes = [wintypes.HWND, wintypes.UINT]
     user32.GetAncestor.restype = wintypes.HWND
     user32.GetForegroundWindow.restype = wintypes.HWND
+    user32.GetWindow.argtypes = [wintypes.HWND, wintypes.UINT]
+    user32.GetWindow.restype = wintypes.HWND
     user32.SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int,
                                     ctypes.c_int, ctypes.c_int, wintypes.UINT]
     dwmapi.DwmGetWindowAttribute.argtypes = [wintypes.HWND, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD]
@@ -82,6 +84,9 @@ if sys.platform == "win32":
         user32.EnumWindows(cb, 0)
         if not found:
             return None
+        # 업데이트 안내창 같은 딸린 창(주인 창이 있는 창)보다 위챗 본 창을 우선
+        main = [f for f in found if not user32.GetWindow(f[0], 4)]  # GW_OWNER
+        found = main or found
         return max(found, key=lambda f: (f[1][2] - f[1][0]) * (f[1][3] - f[1][1]))
 
     def wechat_state() -> str:

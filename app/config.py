@@ -12,10 +12,10 @@ from pathlib import Path
 
 APP_NAME = "ManosWeChatTranslator"
 
-CONFIG_VERSION = 6
+CONFIG_VERSION = 7
 # 화면 인식 관련 값은 버전이 바뀌면 새 기본값으로 다시 맞춤
 LAYOUT_KEYS = ("chat_left_ratio", "title_height", "input_height", "ocr_min_score", "ocr_min_height",
-               "title_map")
+               "title_map", "known_vendors")
 
 DEFAULTS = {
     "config_version": CONFIG_VERSION,
@@ -88,8 +88,9 @@ def load_config() -> dict:
             if saved.get("config_version", 1) < CONFIG_VERSION:
                 for k in LAYOUT_KEYS:
                     saved.pop(k, None)
-                if saved.get("config_version", 1) < 6:
-                    archive_temp_histories()
+                if saved.get("config_version", 1) < 7:
+                    # 대화방 구분이 잘못돼 기록이 섞였던 시험 기간 기록은 모두 보관 폴더로 (지우지 않음)
+                    archive_temp_histories(everything=True)
                 saved["config_version"] = CONFIG_VERSION
             cfg.update(saved)
         except (OSError, ValueError):
@@ -148,12 +149,12 @@ def rename_history(old: str, new: str) -> None:
         pass
 
 
-def archive_temp_histories() -> None:
+def archive_temp_histories(everything: bool = False) -> None:
     """임시 이름(대화방 N, 미지정)으로 저장된 기록을 history/_old 로 옮겨 보관 (지우지 않음)."""
     h = data_dir() / "history"
     old = h / "_old"
     for f in list(h.glob("*.json")):
-        if f.stem.startswith(("대화방", "_미지정")):
+        if everything or f.stem.startswith(("대화방", "_미지정")):
             old.mkdir(exist_ok=True)
             try:
                 f.replace(old / f"{f.stem}_{int(f.stat().st_mtime)}.json")

@@ -45,3 +45,17 @@ def launch(path: str) -> bool:
         return True
     except OSError:
         return False
+
+
+def is_running() -> bool:
+    """위챗이 이미 켜져 있는지 (트레이에 숨어 있어도)."""
+    if sys.platform != "win32":
+        return False
+    import subprocess
+    try:
+        out = subprocess.run(["tasklist", "/FO", "CSV", "/NH"], capture_output=True, timeout=10,
+                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout
+        text = out.decode("mbcs", "replace").lower()
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return '"weixin.exe"' in text or '"wechat.exe"' in text

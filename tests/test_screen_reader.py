@@ -44,3 +44,27 @@ def test_bubble_sides_and_photo():
     assert side(84, 186, 200, 206) == "in"            # 말풍선 둘째 줄
     assert side(W - 406 - LEFT, 270, W - 90 - LEFT, 290) == "out"
     assert side(150, 420, 230, 440) == "photo"        # 사진 속 글자
+
+
+def test_title_signature_separates_rooms_with_same_icons():
+    """위챗 창 버튼·아이콘은 같고 이름만 다른 두 방 → 다른 방, 같은 방 → 같은 방."""
+    from PIL import ImageFont
+
+    from app.screen_reader import same_title, signature_distance, title_signature
+    try:
+        font = ImageFont.truetype("/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc", 18)
+    except OSError:
+        font = ImageFont.load_default()
+
+    def title(name):
+        img = Image.new("RGB", (450, 58), (250, 250, 250))
+        d = ImageDraw.Draw(img)
+        d.text((30, 18), "<", fill=(30, 30, 30), font=font)
+        d.text((60, 18), name, fill=(25, 25, 25), font=font)
+        for x in (330, 370, 410):  # 오른쪽 아이콘들
+            d.ellipse([x, 20, x + 16, 36], outline=(40, 40, 40), width=2)
+        return title_signature(img)
+
+    a, b = title("나희씨 중국 메인직원"), title("A汇星盛通中韩双向")
+    assert same_title(a, title("나희씨 중국 메인직원"))
+    assert not same_title(a, b) and signature_distance(a, b) > 30

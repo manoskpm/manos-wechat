@@ -35,17 +35,18 @@ SAME_TITLE = 8.0  # 제목 지문 차이가 이 값 이하면 같은 대화방 (
 
 
 def title_signature(title_img) -> list:
-    """대화방 제목 지문: 제목 줄에서 글자(어두운 부분)만 정확히 잘라 흑백으로 만든 120x16 그림.
-    빈 배경이 대부분이라 그냥 비교하면 다른 방도 같아 보이므로, 글자 부분만 비교함."""
+    """대화방 제목 지문: 이름이 있는 부분(위챗 창 버튼·오른쪽 아이콘 제외)의 글자만 흑백으로 만든 그림.
+    가는 글자 획이 줄이면서 사라지지 않도록, 줄인 뒤 조금만 어두워도 글자로 봄."""
     gray = title_img.convert("L")
     w, h = gray.size
-    region = gray.crop((min(10, w - 1), 0, min(w, 340), h))
+    region = gray.crop((min(10, w - 1), 0, max(11, int(w * 0.62)), h))
     dark = region.point(lambda v: 255 if v < 150 else 0)
     box = dark.getbbox()
     if not box:
-        return [0] * (120 * 16)
-    text = dark.crop(box).resize((120, 16))
-    return [255 if v >= 128 else 0 for v in text.getdata()]
+        return [0] * (160 * 20)
+    from PIL import Image as _Image
+    text = dark.crop(box).resize((160, 20), _Image.BOX)
+    return [255 if v >= 40 else 0 for v in text.getdata()]
 
 
 def same_title(a, b) -> bool:
@@ -269,7 +270,8 @@ def analyze_window(img, ocr_result, cfg: dict, last_chat_left: float | None = No
         crop_lines(lines, chat_left), chat_right - chat_left, h, title_h, input_h,
         side_fn=lambda l: bubble_side_by_color(rgb, l, chat_left, bg))
     # 제목 왼쪽 부분만 (창 크기를 바꿔도 같은 대화방이면 같은 모양이 되도록 고정 폭)
-    title_img = img.crop((int(chat_left), 0, int(min(chat_right, chat_left + 360)), title_h))
+    band_top = measure_frame(img, chat_left)[0]
+    title_img = img.crop((int(chat_left), band_top + 2, int(chat_right), max(band_top + 4, title_h - 2)))
     band_h, frame_rgb = measure_frame(img, chat_left)
     res = ScanResult(vendor, title_signature(title_img), bubbles, chat_left, title_h)
     res.band_h, res.frame_rgb = band_h, frame_rgb
@@ -331,7 +333,10 @@ class ScreenReader:
         buf = io.BytesIO()
         title.save(buf, format="PNG")
         res.title_png = buf.getvalue()
-        if len(text.replace(" ", "")) < 2:
+        compact = text.replace(" ", "")
+        hangul = sum(1 for ch in compact if "\uac00" <= ch <= "\ud7a3")
+        # 한국어 인식은 한글 이름에만 씀 (중국어 제목을 억지로 읽으면 '口 A,춚〔星…'처럼 깨짐)
+        if len(compact) < 2 or hangul < len(compact) * 0.5:
             text = ""
         if not text and korean_ocr.last_error:
             self._log(f"대화방 이름 읽기 실패: {korean_ocr.last_error}")

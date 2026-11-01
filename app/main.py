@@ -23,7 +23,7 @@ def main():
         from app import wechat_launcher
         cfg = C.load_config()
         path = wechat_launcher.find_wechat_exe(cfg.get("wechat_path"))
-        if path:
+        if path and not wechat_launcher.is_running():  # 이미 켜져 있으면 다시 실행하지 않음
             wechat_launcher.launch(path)
             if path != cfg.get("wechat_path"):
                 cfg["wechat_path"] = path

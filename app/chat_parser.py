@@ -156,3 +156,58 @@ def find_new_incoming(bubbles: list[Bubble], known_texts: list[str], max_new: in
 def is_chinese_text(text: str) -> bool:
     """복사한 글이 번역할 중국어인지 (한글이 섞여 있으면 아님)."""
     return bool(CJK_RE.search(text)) and not HANGUL_RE.search(text) and len(text.strip()) <= 2000
+
+
+CARD_RE = re.compile(r"单号|订单号|日期[:：]|分享.{0,6}单|小程序|Mini Program|\[Link\]|\[链接\]")
+
+
+def is_card_text(text: str) -> bool:
+    """링크 카드·공유 문서 같은 것 (메시지가 아님)."""
+    return bool(CARD_RE.search(text))
+
+
+def merge_into_history(history: list[dict], bubbles: list[Bubble], max_auto: int = 3,
+                       window: int = 80) -> tuple[list[dict], list[dict]]:
+    """화면에 보이는 말풍선을 거래처 기록에 순서대로 끼워 넣음.
+
+    - 이미 기록에 있는 말풍선(기준점)은 그대로 두고, 처음 보는 말풍선만 원문으로 추가합니다.
+    - 기준점 사이/위에 있는 처음 보는 말풍선은 그 위치에 끼워 넣습니다 (위로 스크롤해서 본 옛날 메시지).
+    - 자동 번역 대상(돌려주는 두 번째 목록)은 '마지막 기준점 아래에 새로 나타난 업체 메시지'뿐입니다.
+      처음 여는 대화방(기록이 없음)이면 맨 아래 업체 메시지 1개만 자동 번역합니다.
+    새로 추가된 기록 항목은 {"side", "zh", "ko": ""} 형태입니다.
+    """
+    hist = list(history)
+    start = max(0, len(hist) - window)
+    pending: list[dict] = []
+    added: list[dict] = []
+    anchored = False
+    pos = start
+    for b in bubbles:
+        if b.side not in ("in", "out") or not CJK_RE.search(b.text) or is_card_text(b.text):
+            continue
+        j = next((k for k in range(pos, len(hist)) if hist[k].get("side") == b.side
+                  and similar(hist[k].get("zh", ""), b.text)), None)
+        if j is None:
+            entry = {"side": b.side, "zh": b.text, "ko": ""}
+            pending.append(entry)
+            added.append(entry)
+            continue
+        hist[j:j] = pending
+        pos = j + len(pending) + 1
+        pending = []
+        anchored = True
+
+    auto: list[dict] = []
+    if pending:
+        if anchored or not hist:
+            # 마지막 기준점 아래 = 새로 온 메시지 (또는 처음 여는 대화방)
+            hist.extend(pending)
+            new_in = [e for e in pending if e["side"] == "in"]
+            if anchored:
+                auto = new_in[-max_auto:]
+            elif new_in and pending[-1] is new_in[-1]:
+                auto = new_in[-1:]
+        else:
+            # 기준점이 하나도 없고 기록은 있음 = 위로 스크롤해서 본 옛날 메시지 → 앞쪽에 원문만 추가
+            hist[start:start] = pending
+    return hist, auto

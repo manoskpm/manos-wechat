@@ -24,11 +24,13 @@ jobs:
         run: |
           python -m pytest -q
           python -c "import app.ui; print('ui import ok')"
+          python -c "import winrt.windows.media.ocr; print('winrt ok')"
+          python -c "from PIL import Image; from app.korean_ocr import read_text; print('korean ocr:', read_text(Image.new('RGB', (200, 40), 'white')))"
 
       - name: Build exe
         run: >
           pyinstaller --noconfirm --onefile --windowed --name ManosTranslator
-          --collect-all rapidocr_onnxruntime --collect-binaries onnxruntime
+          --collect-all rapidocr_onnxruntime --collect-binaries onnxruntime --collect-all winrt
           run.py
 
       - uses: actions/upload-artifact@v4

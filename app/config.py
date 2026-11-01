@@ -12,9 +12,10 @@ from pathlib import Path
 
 APP_NAME = "ManosWeChatTranslator"
 
-CONFIG_VERSION = 3
+CONFIG_VERSION = 4
 # 화면 인식 관련 값은 버전이 바뀌면 새 기본값으로 다시 맞춤
-LAYOUT_KEYS = ("chat_left_ratio", "title_height", "input_height", "ocr_min_score", "ocr_min_height")
+LAYOUT_KEYS = ("chat_left_ratio", "title_height", "input_height", "ocr_min_score", "ocr_min_height",
+               "title_map")
 
 DEFAULTS = {
     "config_version": CONFIG_VERSION,
@@ -39,7 +40,9 @@ DEFAULTS = {
     "ocr_min_height": 12,
     # 한국어 메모 이름처럼 글자로 못 읽는 대화방 제목 → 대표님이 정한 거래처 이름
     "title_map": [],
-    "max_new_per_scan": 3,
+    # 대화방 이름 → 대표님이 바꾼 표시 이름
+    "aliases": {},
+    "known_vendors": [],
     "history_for_prompt": 12,
     "quick_phrases": [
         "단가 확인 부탁드립니다",
@@ -119,3 +122,17 @@ def load_history(vendor: str) -> list[dict]:
 def save_history(vendor: str, history: list[dict]) -> None:
     p = data_dir() / "history" / f"{_safe_name(vendor)}.json"
     p.write_text(json.dumps(history[-500:], ensure_ascii=False, indent=1), encoding="utf-8")
+
+
+def rename_history(old: str, new: str) -> None:
+    """거래처 이름을 바꿀 때 대화 기록도 새 이름으로 옮김 (이미 있으면 합침)."""
+    if old == new:
+        return
+    old_h = load_history(old)
+    if not old_h:
+        return
+    save_history(new, load_history(new) + old_h)
+    try:
+        (data_dir() / "history" / f"{_safe_name(old)}.json").unlink()
+    except OSError:
+        pass

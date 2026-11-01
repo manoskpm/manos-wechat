@@ -9,11 +9,12 @@ import threading
 import time
 import tkinter as tk
 import traceback
+import uuid
 from tkinter import messagebox, simpledialog
 
 from . import config as C
 from . import win_window
-from .chat_parser import find_new_incoming, is_chinese_text, similar
+from .chat_parser import is_chinese_text, merge_into_history, similar
 from .prompts import TONES
 from .screen_reader import ScreenReader
 from .translator import TranslateError, Translator, build_request
@@ -44,13 +45,11 @@ class App:
         self.q: queue.Queue = queue.Queue()
         self.vendor = ""
         self.history: list[dict] = []
-        self.session_seen: dict[str, list[str]] = {}
         self.last_clip = None
         self.own_clip = None
         self.translator = None
         self._last_geom = None
-        self.title_sig = None
-        self._unknown_hint_shown = False
+        self._raw_key = ""
 
         self._build()
         try:  # 프로그램을 켜기 전에 복사해 둔 글은 번역하지 않음
@@ -148,9 +147,14 @@ class App:
         self.copy_lbl.pack(side="left")
         tk.Button(row, text="다시 복사", font=(FONT, 8), command=self._recopy).pack(side="right")
 
-        self.input = tk.Text(self.root, height=3, wrap="char", font=f, relief="solid", bd=1,
+        inrow = tk.Frame(self.root, bg=BG)
+        inrow.pack(fill="x", side="bottom", padx=8, pady=2)
+        tk.Button(inrow, text="번역", font=(FONT, 10, "bold"), bg="#2563eb", fg="white",
+                  activebackground="#1d4ed8", activeforeground="white", relief="flat",
+                  command=self._send).pack(side="right", fill="y", padx=(4, 0))
+        self.input = tk.Text(inrow, height=3, wrap="char", font=f, relief="solid", bd=1,
                              highlightthickness=2, highlightcolor="#3b82f6")
-        self.input.pack(fill="x", side="bottom", padx=8, pady=2)
+        self.input.pack(side="left", fill="x", expand=True)
         self.input.bind("<Return>", self._on_enter)
         self.input.bind("<Shift-Return>", lambda e: None)
         tk.Label(self.root, text="한국어로 쓰고 Enter (줄바꿈: Shift+Enter)", bg=BG, fg=GRAY,
@@ -182,6 +186,10 @@ class App:
         self.log.tag_config("out_zh", foreground=GREEN, font=(FONT, 10, "bold"))
         self.log.tag_config("err", foreground="#dc2626")
         self.log.tag_config("hint", foreground="#7c3aed")
+        self.log.tag_config("click", foreground="#2563eb", underline=True)
+        self.log.tag_config("right", justify="right")
+        self.log.tag_bind("click", "<Enter>", lambda e: self.log.config(cursor="hand2"))
+        self.log.tag_bind("click", "<Leave>", lambda e: self.log.config(cursor=""))
         self.log.config(state="disabled")
 
     # ------------------------------------------------------------ 설정
@@ -236,51 +244,65 @@ class App:
 
     def _ask_vendor(self):
         name = self._dialog(
-            simpledialog.askstring, "거래처", "지금 위챗에 열린 대화방의 거래처 이름을 입력하세요.\n"
-            "(한 번 정하면 다음부터 이 대화방을 열 때 자동으로 바뀝니다)",
+            simpledialog.askstring, "거래처 이름", "이 대화방을 패널에 어떤 이름으로 표시할까요?\n"
+            "(바꾼 이름은 기억해 두었다가 다음에도 자동으로 씁니다)",
             initialvalue=self.vendor)
-        if name is None or not name.strip():
+        if name is None or not name.strip() or name.strip() == self.vendor:
             return
         name = name.strip()
-        if self.title_sig:
-            from .screen_reader import signature_distance
-            tm = [e for e in self.cfg.get("title_map", [])
-                  if signature_distance(e["sig"], self.title_sig) > 6.0]
-            tm.append({"sig": self.title_sig, "name": name})
-            self.cfg["title_map"] = tm[-200:]
+        old = self.vendor
+        if self._raw_key:
+            self.cfg.setdefault("aliases", {})[self._raw_key] = name
             C.save_config(self.cfg)
+        C.rename_history(old or "_미지정", name)
         self.set_vendor(name)
 
     # ------------------------------------------------------------ 거래처 / 기록
     def set_vendor(self, vendor: str):
         self.vendor = vendor
-        self.vendor_var.set(vendor or "거래처 미지정")
+        self.vendor_var.set(vendor or "위챗 대화방을 클릭하세요")
         self.history = C.load_history(vendor or "_미지정")
-        self.log.config(state="normal")
-        self.log.delete("1.0", "end")
-        self.log.config(state="disabled")
-        for h in self.history[-20:]:
-            self._render(h)
+        for h in self.history:
+            h.setdefault("id", uuid.uuid4().hex)
+        self._render_all()
 
     def _save(self):
         C.save_history(self.vendor or "_미지정", self.history)
 
-    def _render(self, h: dict):
+    def _render_all(self):
         self.log.config(state="normal")
-        if h["side"] == "in":
-            self.log.insert("end", "업체 →\n", "label")
-            self.log.insert("end", h["zh"] + "\n", "zh")
-            self.log.insert("end", h.get("ko", "") + "\n", "in_ko")
-            if h.get("nuance"):
-                mark = "💡 " if h.get("certainty") == "high" else "💡(추정) "
-                self.log.insert("end", mark + h["nuance"] + "\n", "nuance")
-        else:
-            self.log.insert("end", "→ 업체 (나)\n", "label")
-            self.log.insert("end", h.get("ko", "") + "\n", "out_ko")
-            self.log.insert("end", h["zh"] + "\n", "out_zh")
-        self.log.insert("end", "\n")
+        self.log.delete("1.0", "end")
+        for h in self.history[-80:]:
+            self._render(h)
         self.log.config(state="disabled")
         self.log.see("end")
+
+    def _render(self, h: dict):
+        """메시지 하나를 패널에 표시 (번역 안 된 메시지는 클릭하면 번역)."""
+        log = self.log
+        if h["side"] == "in":
+            log.insert("end", "업체\n", "label")
+            log.insert("end", h["zh"] + "\n", "zh")
+        else:
+            log.insert("end", "나\n", ("label", "right"))
+            if h.get("src") == "panel":
+                log.insert("end", h.get("ko", "") + "\n", ("out_ko", "right"))
+            log.insert("end", h["zh"] + "\n", ("out_zh", "right"))
+        translated = h.get("ko") if h["side"] == "in" or h.get("src") != "panel" else True
+        if h.get("pending"):
+            log.insert("end", "번역 중...\n", "label")
+        elif not translated:
+            tag = "tr_" + h["id"]
+            log.insert("end", "🌐 눌러서 번역\n", ("click", tag) + (("right",) if h["side"] == "out" else ()))
+            log.tag_bind(tag, "<Button-1>", lambda e, i=h["id"]: self._translate_entry_by_id(i))
+        elif h["side"] == "in":
+            log.insert("end", h["ko"] + "\n", "in_ko")
+            if h.get("nuance"):
+                mark = "💡 " if h.get("certainty") == "high" else "💡(추정) "
+                log.insert("end", mark + h["nuance"] + "\n", "nuance")
+        elif h.get("src") != "panel":
+            log.insert("end", h["ko"] + "\n", ("out_ko", "right"))
+        log.insert("end", "\n")
 
     def _hint(self, msg: str):
         self.log.config(state="normal")
@@ -298,74 +320,130 @@ class App:
     def _on_scan_thread(self, res):
         self.q.put(("scan", res))
 
-    def _vendor_from_title(self, res):
-        # 대표님이 직접 정한 이름이 있으면 그것을 먼저 사용
+    def _resolve_vendor(self, res) -> str:
+        """대화방 이름 정하기: 한국어로 읽은 이름 → 제목 모양으로 기억한 이름 → 새 대화방."""
         from .screen_reader import signature_distance
-        best = min(self.cfg.get("title_map", []), default=None,
-                   key=lambda e: signature_distance(e["sig"], res.title_sig))
-        if best and signature_distance(best["sig"], res.title_sig) <= 6.0:
-            return best["name"]
-        return res.vendor or None
+        cfg = self.cfg
+        changed = False
+        registry = cfg.setdefault("title_map", [])
+        best = min(registry, default=None, key=lambda e: signature_distance(e["sig"], res.title_sig))
+        best_ok = best is not None and signature_distance(best["sig"], res.title_sig) <= 5.0
+        raw = res.title_text or res.vendor
+        if raw:
+            known = cfg.setdefault("known_vendors", [])
+            canon = next((k for k in known if similar(k, raw, 0.8)), None)
+            if canon is None:
+                canon = raw
+                known.append(raw)
+                changed = True
+            if best_ok and best["name"] != canon:
+                best["name"] = canon
+                changed = True
+            elif not best_ok:
+                registry.append({"sig": res.title_sig, "name": canon})
+                changed = True
+        elif best_ok:
+            canon = best["name"]
+        else:
+            canon = f"대화방 {len(registry) + 1}"
+            registry.append({"sig": res.title_sig, "name": canon})
+            changed = True
+            self.root.after(200, lambda: self._hint(
+                f"대화방 이름을 읽지 못해 '{canon}'(으)로 저장했습니다. 위의 [거래처 변경]으로 이름을 바꿀 수 있어요."))
+        if changed:
+            cfg["title_map"] = registry[-300:]
+            C.save_config(cfg)
+        self._raw_key = canon
+        return cfg.get("aliases", {}).get(canon, canon)
 
     def _handle_scan(self, res):
-        from .screen_reader import signature_distance
-        same_room = signature_distance(res.title_sig, self.title_sig) <= 6.0
-        self.title_sig = res.title_sig
-        vendor = self._vendor_from_title(res)
-        if vendor is not None:
-            if not similar(vendor, self.vendor, 0.8):
-                self.set_vendor(vendor)
-        elif not same_room:
-            self.set_vendor("")
-            self._hint("이 대화방 이름은 글자로 읽지 못했습니다. 위의 [거래처 변경]을 눌러 "
-                       "이름을 한 번만 정해 주세요. 다음부터는 자동으로 바뀝니다.")
-        bubbles = res.bubbles
-        key = self.vendor or "_미지정"
-        seen = self.session_seen.setdefault(key, [])
-        # 이미 번역한 업체 메시지 + 내가 보낸 중국어(입력창에 붙여넣은 글을 업체 글로 착각하지 않게)
-        known = [h["zh"] for h in self.history] + seen
-        all_new = find_new_incoming(bubbles, known, max_new=10_000)
-        to_translate = all_new[-self.cfg.get("max_new_per_scan", 3):]
-        seen.extend(all_new)  # 오래된 것은 번역하지 않고 '본 것'으로 처리
-        for text in to_translate:
-            self._translate_async("in", text)
+        vendor = self._resolve_vendor(res)
+        if vendor != self.vendor:
+            self.set_vendor(vendor)
+        hist, auto = merge_into_history(self.history, res.bubbles, max_auto=3)
+        if len(hist) != len(self.history):
+            now = time.strftime("%Y-%m-%d %H:%M")
+            for h in hist:
+                h.setdefault("id", uuid.uuid4().hex)
+                h.setdefault("t", now)
+            self.history = hist
+            self._save()
+            self._render_all()
+        for e in auto:  # 새로 온 업체 메시지만 자동 번역 (옛날 메시지는 눌러야 번역)
+            self._translate_entry(e)
 
-    def _translate_async(self, direction, text, tone="polite"):
+    def _translate_entry_by_id(self, entry_id):
+        entry = next((h for h in self.history if h.get("id") == entry_id), None)
+        if entry and not entry.get("pending"):
+            self._translate_entry(entry)
+
+    def _translate_entry(self, entry):
+        """기록에 있는 중국어 메시지(업체 것 또는 내가 위챗에 직접 쓴 것)를 한국어로 번역."""
         if not self.translator:
             self._log_error("API 키가 없습니다. ⚙ 메뉴에서 API 키를 넣어 주세요.")
             return
-        vendor, history = self.vendor, list(self.history)
+        entry["pending"] = True
+        self._render_all()
+        self._translate_async("in", entry["zh"], entry_id=entry["id"])
+
+    def _translate_async(self, direction, text, tone="polite", entry_id=None):
+        if not self.translator:
+            self._log_error("API 키가 없습니다. ⚙ 메뉴에서 API 키를 넣어 주세요.")
+            return
+        vendor = self.vendor
+        history = [h for h in self.history if h.get("ko") and h.get("id") != entry_id]
         req = build_request(cfg=self.cfg, user_instructions=C.load_user_instructions(), vendor=vendor,
                             history=history, direction=direction, text=text, tone=tone)
 
         def work():
             try:
-                self.q.put(("done", direction, vendor, text, self.translator.run(req)))
+                self.q.put(("done", direction, vendor, entry_id, text, self.translator.run(req)))
             except TranslateError as e:
-                self.q.put(("error", str(e)))
+                self.q.put(("error", str(e), vendor, entry_id))
             except Exception as e:  # 예상 못 한 오류도 화면에 표시
-                self.q.put(("error", f"알 수 없는 오류: {e}"))
+                self.q.put(("error", f"알 수 없는 오류: {e}", vendor, entry_id))
 
         self.status_var.set("번역 중...")
         threading.Thread(target=work, daemon=True).start()
 
-    def _handle_done(self, direction, vendor, text, data):
-        entry = {"t": time.strftime("%Y-%m-%d %H:%M")}
-        if direction == "in":
-            entry.update(side="in", zh=text, ko=data.get("korean", ""),
-                         nuance=data.get("nuance", ""), certainty=data.get("certainty", "none"))
-        else:
-            entry.update(side="out", ko=text, zh=data.get("chinese", ""),
-                         back=data.get("back_translation", ""), note=data.get("note", ""))
-            self._show_result(entry)
+    def _history_of(self, vendor):
+        return self.history if vendor == self.vendor else C.load_history(vendor or "_미지정")
+
+    def _store(self, vendor, hist):
         if vendor == self.vendor:
-            self.history.append(entry)
+            self.history = hist
             self._save()
-            self._render(entry)
-        else:  # 번역 중에 거래처가 바뀐 경우 원래 거래처 기록에 저장
-            h = C.load_history(vendor or "_미지정")
-            h.append(entry)
-            C.save_history(vendor or "_미지정", h)
+            self._render_all()
+        else:  # 번역 중에 대화방이 바뀐 경우 원래 거래처 기록에 저장
+            C.save_history(vendor or "_미지정", hist)
+
+    def _handle_done(self, direction, vendor, entry_id, text, data):
+        hist = self._history_of(vendor)
+        if direction == "in":
+            entry = next((h for h in hist if h.get("id") == entry_id), None)
+            if entry is None:
+                return
+            entry.pop("pending", None)
+            entry.update(ko=data.get("korean", ""), nuance=data.get("nuance", ""),
+                         certainty=data.get("certainty", "none"))
+            if entry["side"] == "out":
+                entry["nuance"] = ""
+        else:
+            entry = {"id": uuid.uuid4().hex, "t": time.strftime("%Y-%m-%d %H:%M"), "side": "out",
+                     "src": "panel", "ko": text, "zh": data.get("chinese", ""),
+                     "back": data.get("back_translation", ""), "note": data.get("note", "")}
+            hist.append(entry)
+            self._show_result(entry)
+        self._store(vendor, hist)
+
+    def _handle_error(self, msg, vendor, entry_id):
+        self._log_error(msg)
+        if entry_id:
+            hist = self._history_of(vendor)
+            for h in hist:
+                if h.get("id") == entry_id:
+                    h.pop("pending", None)
+            self._store(vendor, hist)
 
     # ------------------------------------------------------------ 보내는 메시지
     def _on_enter(self, event):
@@ -421,7 +499,7 @@ class App:
                     self._handle_done(*item[1:])
                     self.status_var.set("")
                 elif kind == "error":
-                    self._log_error(item[1])
+                    self._handle_error(*item[1:])
                     if self.res_zh.cget("text") == "번역 중...":
                         self.res_zh.config(text="")
                     self.status_var.set("")
@@ -467,10 +545,16 @@ class App:
             if clip and clip != self.last_clip:
                 self.last_clip = clip
                 if clip != self.own_clip and is_chinese_text(clip):
-                    known = [h["zh"] for h in self.history[-30:] if h["side"] == "in"]
-                    if not any(similar(clip, k) for k in known):
-                        self.session_seen.setdefault(self.vendor or "_미지정", []).append(clip)
-                        self._translate_async("in", clip.strip())
+                    # 복사한 중국어: 기록에 있는 메시지면 그 메시지를, 없으면 새 업체 메시지로 추가해서 번역
+                    clip = clip.strip()
+                    entry = next((h for h in reversed(self.history) if similar(h["zh"], clip)), None)
+                    if entry is None:
+                        entry = {"id": uuid.uuid4().hex, "t": time.strftime("%Y-%m-%d %H:%M"),
+                                 "side": "in", "zh": clip, "ko": ""}
+                        self.history.append(entry)
+                        self._save()
+                    if not entry.get("ko") and not entry.get("pending"):
+                        self._translate_entry(entry)
 
     def _status_tick(self):
         if not self.status_var.get().startswith("번역"):

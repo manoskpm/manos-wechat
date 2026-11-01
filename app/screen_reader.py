@@ -20,6 +20,8 @@ class ScanResult:
     title_sig: list = field(default_factory=list)  # 제목 부분의 그림 지문 (이름을 못 읽을 때 대화방 구분용)
     bubbles: list[Bubble] = field(default_factory=list)
     chat_left: float = 0
+    title_h: int = 0
+    title_text: str = ""            # 윈도우 한국어 인식으로 읽은 대화방 이름 (예: 칭펑 핸드메이드)
 
 
 def image_signature(img, size=(48, 48)):
@@ -128,8 +130,9 @@ def analyze_window(img, ocr_result, cfg: dict, last_chat_left: float | None = No
     vendor, bubbles = parse_chat(
         crop_lines(lines, chat_left), w - chat_left, h, title_h, input_h,
         side_fn=lambda l: bubble_side_by_color(rgb, l, chat_left, bg))
-    title_img = img.crop((int(chat_left), 0, w, title_h))
-    return ScanResult(vendor, image_signature(title_img, (96, 12)), bubbles, chat_left)
+    # 제목 왼쪽 부분만 (창 크기를 바꿔도 같은 대화방이면 같은 모양이 되도록 고정 폭)
+    title_img = img.crop((int(chat_left), 0, int(min(w, chat_left + 360)), title_h))
+    return ScanResult(vendor, image_signature(title_img, (96, 12)), bubbles, chat_left, title_h)
 
 
 class ScreenReader:
@@ -167,6 +170,9 @@ class ScreenReader:
         result, _ = self._get_ocr()(np.array(img))
         res = analyze_window(img, result, self.cfg, self._chat_left)
         self._chat_left = res.chat_left
+        from .korean_ocr import clean_title, read_text
+        title = img.crop((int(res.chat_left), 0, int(min(img.width, res.chat_left + 500)), res.title_h))
+        res.title_text = clean_title(read_text(title.resize((title.width * 2, title.height * 2))))
         return res
 
     def grab_now(self):
@@ -253,6 +259,6 @@ class ScreenReader:
         self.status = "읽는 중..."
         res = self.scan_image(img)
         self.status = "자동 읽기 중"
-        self._log(f"scan vendor={res.vendor!r} chat_left={res.chat_left:.0f} "
+        self._log(f"scan title={res.title_text!r} vendor={res.vendor!r} chat_left={res.chat_left:.0f} "
                   f"bubbles={[(b.side, b.text[:20]) for b in res.bubbles]}")
         self.on_scan(res)

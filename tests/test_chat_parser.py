@@ -104,3 +104,45 @@ def test_real_wechat_screenshot2():
     ins = [b.text for b in res.bubbles if b.side == "in"]
     assert ins == ["2件", "上衣架：19公斤裤架：24公斤", "好的"]
     assert len([b for b in res.bubbles if b.side == "out"]) == 2
+
+
+def _b(side, text):
+    from app.chat_parser import Bubble
+    return Bubble(side, text, 0, 0)
+
+
+def test_merge_new_chat_translates_only_latest():
+    from app.chat_parser import merge_into_history
+    hist, auto = merge_into_history([], [_b("in", "你好"), _b("out", "单价多少"), _b("in", "单价28元")])
+    assert [h["zh"] for h in hist] == ["你好", "单价多少", "单价28元"]
+    assert [a["zh"] for a in auto] == ["单价28元"]
+
+
+def test_merge_new_messages_below_anchor_are_translated():
+    from app.chat_parser import merge_into_history
+    old = [{"side": "in", "zh": "你好", "ko": "안녕하세요"}, {"side": "out", "zh": "单价多少", "ko": "단가?"}]
+    hist, auto = merge_into_history(old, [_b("in", "你好"), _b("out", "单价多少"),
+                                          _b("in", "好的"), _b("in", "明天发货")])
+    assert [h["zh"] for h in hist] == ["你好", "单价多少", "好的", "明天发货"]
+    assert [a["zh"] for a in auto] == ["好的", "明天发货"]
+
+
+def test_merge_scrolled_up_old_messages_not_translated():
+    from app.chat_parser import merge_into_history
+    old = [{"side": "in", "zh": "明天发货", "ko": "내일 발송"}]
+    # 위로 스크롤: 처음 보는 옛날 메시지들 + 기준점
+    hist, auto = merge_into_history(old, [_b("in", "样品寄出了"), _b("out", "谢谢"), _b("in", "明天发货")])
+    assert [h["zh"] for h in hist] == ["样品寄出了", "谢谢", "明天发货"]
+    assert auto == []
+    # 기준점이 하나도 안 보일 만큼 더 올라감
+    hist2, auto2 = merge_into_history(hist, [_b("in", "你好老板")])
+    assert hist2[0]["zh"] == "你好老板" and auto2 == []
+
+
+def test_merge_duplicate_short_message_and_card():
+    from app.chat_parser import merge_into_history
+    old = [{"side": "in", "zh": "好的", "ko": "네"}, {"side": "out", "zh": "发货了吗", "ko": ""}]
+    hist, auto = merge_into_history(old, [_b("in", "好的"), _b("out", "发货了吗"), _b("in", "好的"),
+                                          _b("in", "妖野向MANOS分享销售单单号:A8012")])
+    assert [h["zh"] for h in hist] == ["好的", "发货了吗", "好的"]
+    assert [a["zh"] for a in auto] == ["好的"]

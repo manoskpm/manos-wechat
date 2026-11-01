@@ -39,10 +39,22 @@ jobs:
           --collect-all rapidocr_onnxruntime --collect-binaries onnxruntime
           run.py
 
+      - name: Build installer
+        shell: pwsh
+        env:
+          APP_VERSION: ${{ github.run_number }}
+        run: |
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress }
+          & $iscc installer\ManosTranslator.iss
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
       - uses: actions/upload-artifact@v4
         with:
           name: ManosTranslator-windows
-          path: dist/ManosTranslator.exe
+          path: |
+            dist/ManosTranslator.exe
+            dist/ManosTranslator-Setup.exe
           retention-days: 14
 
       # 자동 업데이트용: 새 버전(v빌드번호)으로 실행 파일을 올림
@@ -52,5 +64,5 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           git log -1 --format=%B > notes.txt
-          gh release create "v${{ github.run_number }}" dist/ManosTranslator.exe \
+          gh release create "v${{ github.run_number }}" dist/ManosTranslator.exe dist/ManosTranslator-Setup.exe \
             --target "${{ github.sha }}" --title "발주 번역기 v${{ github.run_number }}" --notes-file notes.txt

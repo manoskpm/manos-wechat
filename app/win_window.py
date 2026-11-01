@@ -84,6 +84,31 @@ if sys.platform == "win32":
             return None
         return max(found, key=lambda f: (f[1][2] - f[1][0]) * (f[1][3] - f[1][1]))
 
+    def wechat_state() -> str:
+        """위챗 창 상태: "visible"(보임), "minimized"(최소화), "gone"(닫힘 또는 트레이로 숨김)."""
+        if find_wechat():
+            return "visible"
+        state = ["gone"]
+
+        @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+        def cb(hwnd, _):
+            if user32.IsWindowVisible(hwnd) and user32.IsIconic(hwnd) and _title(hwnd).strip() in WECHAT_TITLES:
+                state[0] = "minimized"
+            return True
+
+        user32.EnumWindows(cb, 0)
+        return state[0]
+
+    _mutex = None
+
+    def acquire_single_instance(name: str = "ManosWeChatTranslator.Single") -> bool:
+        """번역기가 이미 켜져 있으면 False (두 개가 켜지지 않게)."""
+        global _mutex
+        kernel32 = ctypes.windll.kernel32
+        kernel32.CreateMutexW.restype = wintypes.HANDLE
+        _mutex = kernel32.CreateMutexW(None, False, name)
+        return kernel32.GetLastError() != 183  # ERROR_ALREADY_EXISTS
+
     def foreground_hwnd():
         return user32.GetForegroundWindow()
 
@@ -111,6 +136,12 @@ else:  # 개발용(윈도우가 아닌 환경)에서는 아무것도 찾지 않�
 
     def find_wechat():
         return None
+
+    def wechat_state() -> str:
+        return "gone"
+
+    def acquire_single_instance(name: str = "") -> bool:
+        return True
 
     def foreground_hwnd():
         return None

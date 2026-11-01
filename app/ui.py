@@ -31,8 +31,11 @@ GRAY = "#6b7280"
 
 
 class App:
-    def __init__(self):
+    def __init__(self, ask_wechat_path: bool = False):
         self.cfg = C.load_config()
+        self._wechat_seen = False
+        self._gone_since = None
+        self._hidden = False
         self.root = tk.Tk()
         self.root.title(f"발주 번역기 v{VERSION}")
         self.root.configure(bg=BG)
@@ -71,6 +74,9 @@ class App:
         self._every(500, self._dock_tick)
         self._every(800, self._clipboard_tick)
         self._every(1000, self._status_tick)
+        self._every(1000, self._lifecycle_tick)
+        if ask_wechat_path and not self.cfg.get("wechat_path"):
+            self.root.after(800, self._ask_wechat_path)
         self.root.after(300, self._ensure_api_key)
         if updater.can_update():
             self.root.after(5000, self._check_update)
@@ -102,6 +108,44 @@ class App:
             return fn(*args, parent=self.root, **kwargs)
         finally:
             self.root.attributes("-topmost", True)
+
+    # ------------------------------------------------------------ 위챗과 같이 켜지고 꺼지기
+    def _lifecycle_tick(self):
+        """위챗 최소화 → 패널 숨김, 위챗 닫힘(트레이 포함) 5초 → 번역기 완전히 종료."""
+        state = win_window.wechat_state()
+        if state == "visible":
+            self._wechat_seen = True
+            self._gone_since = None
+            if self._hidden:
+                self.root.deiconify()
+                self._hidden = False
+                self._last_geom = None
+        elif state == "minimized":
+            self._gone_since = None
+            if self.dock_var.get() and not self._hidden:
+                self.root.withdraw()
+                self._hidden = True
+        elif self._wechat_seen and sys.platform == "win32":
+            if self._gone_since is None:
+                self._gone_since = time.time()
+            elif time.time() - self._gone_since > 5:
+                self._write_log("위챗이 닫혀서 번역기도 종료")
+                self.quit()
+
+    def _ask_wechat_path(self):
+        from tkinter import filedialog
+        from . import wechat_launcher
+        if wechat_launcher.find_wechat_exe(self.cfg.get("wechat_path")):
+            return
+        self._dialog(messagebox.showinfo, "위챗 위치",
+                     "위챗 프로그램 위치를 찾지 못했습니다.\n다음 창에서 위챗 실행 파일(Weixin.exe 또는 WeChat.exe)을 "
+                     "한 번만 골라 주세요. 다음부터는 자동으로 켭니다.")
+        path = self._dialog(filedialog.askopenfilename, title="위챗 실행 파일 고르기",
+                            filetypes=[("위챗", "*.exe")])
+        if path:
+            self.cfg["wechat_path"] = path
+            C.save_config(self.cfg)
+            wechat_launcher.launch(path)
 
     # ------------------------------------------------------------ 자동 업데이트
     def _check_update(self):
@@ -602,7 +646,11 @@ class App:
                 clip = None
             if clip and clip != self.last_clip:
                 self.last_clip = clip
-                if clip != self.own_clip and is_chinese_text(clip):
+                # 위챗이나 번역 패널에서 복사한 것만 번역 (1688 등 다른 곳에서 복사한 중국어는 무시)
+                found = win_window.find_wechat()
+                fg = win_window.foreground_hwnd()
+                from_wechat = sys.platform != "win32" or (found and fg in (found[0], self._own_hwnd()))
+                if from_wechat and clip != self.own_clip and is_chinese_text(clip):
                     # 복사한 중국어: 기록에 있는 메시지면 그 메시지를, 없으면 새 업체 메시지로 추가해서 번역
                     clip = clip.strip()
                     entry = next((h for h in reversed(self.history) if similar(h["zh"], clip)), None)

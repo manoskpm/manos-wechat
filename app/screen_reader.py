@@ -32,6 +32,7 @@ class ScanResult:
     win_h: int = 0                  # 위챗 창 높이 (화면 픽셀)
     frame_rgb: tuple = ()           # 위챗 바깥 테두리 색 (반투명이라 바탕화면에 따라 바뀜)
     chat_bg: tuple = ()             # 위챗 대화 영역 바탕색
+    timing: dict = field(default_factory=dict)   # 걸린 시간 기록 (속도 확인용)
 
 
 def image_signature(img, size=(48, 48)):
@@ -277,11 +278,29 @@ def measure_frame(img, chat_left: float) -> tuple[int, tuple]:
     return 0, frame
 
 
-def analyze_window(img, ocr_result, cfg: dict, last_chat_left: float | None = None) -> ScanResult:
-    """위챗 창 전체 사진 + 글자 인식 결과 → 거래처 이름과 말풍선."""
+BASE_BAND = 40   # 시험 화면(기준 크기)의 위챗 맨 위 회색 줄 높이
+
+
+def estimate_scale(img) -> tuple[float, float | None]:
+    """화면 배율 추정: 위챗 맨 위 회색 줄 높이가 배율에 따라 정확히 늘어남 (기준 40 → 150%면 60).
+    (배율, 기준 크기에서의 대화 영역 왼쪽 끝)"""
+    cl = detect_chat_left_by_color(img)
+    if cl is None:
+        return 1.0, None
+    band = measure_frame(img, cl)[0]
+    scale = band / BASE_BAND if band else 1.0
+    if scale < 1.15:   # 거의 기준 크기면 그대로
+        return 1.0, cl
+    return min(scale, 3.0), cl / min(scale, 3.0)
+
+
+def analyze_window(img, ocr_result, cfg: dict, last_chat_left: float | None = None,
+                   chat_left: float | None = None) -> ScanResult:
+    """위챗 창 전체 사진 + 글자 인식 결과 → 거래처 이름과 말풍선.
+    chat_left 를 주면(대화 영역만 글자 인식한 경우) 대화방 목록 날짜로 찾는 단계를 건너뜀."""
     w, h = img.width, img.height
     lines = to_lines(ocr_result, cfg["ocr_min_score"], cfg.get("ocr_min_height", 12))
-    chat_left = (detect_chat_left(lines, w) or detect_chat_left_by_color(img)
+    chat_left = (chat_left or detect_chat_left(lines, w) or detect_chat_left_by_color(img)
                  or last_chat_left or w * cfg["chat_left_ratio"])
     chat_right = detect_chat_right_by_color(img, chat_left) or w
     lines = [l for l in lines if l.x1 <= chat_right + 4]
@@ -336,11 +355,26 @@ class ScreenReader:
             self._ocr = RapidOCR()
         return self._ocr
 
-    def scan_image(self, img) -> ScanResult:
+    def scan_image(self, full) -> ScanResult:
+        """위챗 화면 읽기. 속도를 위해 ① 화면 배율이 크면 기준 크기로 줄이고 ② 대화방 목록은 빼고
+        대화 영역만 글자 인식. 결과 위치는 다시 실제 화면 크기로 돌려 줌."""
         import numpy as np
-        # 속도: 위챗 글자는 항상 바로 서 있으므로 글자 방향 확인 단계는 생략
-        result, _ = self._get_ocr()(np.array(img), use_cls=False)
-        res = analyze_window(img, result, self.cfg, self._chat_left)
+        from PIL import Image
+        t0 = time.perf_counter()
+        full = full if full.mode == "RGB" else full.convert("RGB")
+        scale, cl = estimate_scale(full)
+        img = full if scale == 1.0 else full.resize((round(full.width / scale), round(full.height / scale)),
+                                                    Image.BILINEAR)
+        if cl is not None:
+            x0 = max(0, int(cl) - 2)
+            part = np.array(img.crop((x0, 0, img.width, img.height)))
+            # 속도: 위챗 글자는 항상 바로 서 있으므로 글자 방향 확인 단계는 생략
+            result, _ = self._get_ocr()(part, use_cls=False)
+            result = [[[[p[0] + x0, p[1]] for p in box], text, score] for box, text, score in (result or [])]
+        else:
+            result, _ = self._get_ocr()(np.array(img), use_cls=False)
+        t1 = time.perf_counter()
+        res = analyze_window(img, result, self.cfg, self._chat_left, chat_left=cl)
         self._chat_left = res.chat_left
         # 거울 화면: 대화 영역의 모든 덩어리(말풍선·사진·파일·시간 줄 …)를 위챗과 같은 높이로
         from .chat_parser import to_lines
@@ -348,21 +382,35 @@ class ScreenReader:
         chat_right = detect_chat_right_by_color(img, res.chat_left) or img.width
         bottom = detect_input_box_top(img, res.chat_left, chat_right) or int(img.height * 0.76)
         bg = background_color(img, res.chat_left, res.title_h) or (250, 250, 250)
-        res.chat_top, res.chat_bottom, res.win_h = res.title_h, bottom, img.height
         res.chat_bg = tuple(bg[:3])
-        res.items = segment_chat(img, to_lines(result, self.cfg["ocr_min_score"], 10),
-                                 res.chat_left, chat_right, res.title_h, bottom, bg)
+        items = segment_chat(img, to_lines(result, self.cfg["ocr_min_score"], 10),
+                             res.chat_left, chat_right, res.title_h, bottom, bg)
         # 중국어 인식으로 읽은 제목은 중국어가 대부분일 때만 이름으로 씀 ('나무 옷걸이 lyt' → 'l lyt' 방지)
         v = res.vendor.replace(" ", "")
         cjk = sum(1 for ch in v if "\u4e00" <= ch <= "\u9fff")
         if len(v) < 2 or cjk < len(v) * 0.5:
             res.vendor = ""
-        # 한글 이름은 패널이 따로(기다리지 않고) Claude 로 읽음 → 제목 그림만 넘김
+        # 위치를 실제 화면 크기로 되돌림. 사진은 원래 화면에서 잘라 선명하게.
         import io
-        title = img.crop((int(res.chat_left), res.band_h, int(min(img.width, res.chat_left + 500)), res.title_h))
+        S = lambda v: int(round(v * scale))
+        for it in items:
+            it.y0, it.y1, it.x0, it.x1 = S(it.y0), S(it.y1), S(it.x0), S(it.x1)
+            if it.png and scale != 1.0:
+                buf = io.BytesIO()
+                full.crop((it.x0, it.y0, it.x1, it.y1)).save(buf, format="PNG")
+                it.png = buf.getvalue()
+        res.items = items
+        res.chat_left = res.chat_left * scale
+        res.title_h, res.band_h = S(res.title_h), S(res.band_h)
+        res.chat_top, res.chat_bottom, res.win_h = res.title_h, S(bottom), full.height
+        # 한글 이름은 패널이 따로(기다리지 않고) Claude 로 읽음 → 제목 그림만 넘김
+        title = full.crop((int(res.chat_left), res.band_h, int(min(full.width, res.chat_left + 500 * scale)),
+                           res.title_h))
         buf = io.BytesIO()
         title.save(buf, format="PNG")
         res.title_png = buf.getvalue()
+        res.timing = {"scale": round(scale, 2), "read": round(t1 - t0, 2),
+                      "total": round(time.perf_counter() - t0, 2)}
         return res
 
     def _title_text(self, img, res) -> str:
@@ -463,10 +511,10 @@ class ScreenReader:
         if signature_distance(sig, self._last_sig) <= 3.0:
             self.status = "자동 읽기 중"
             return
-        # 스크롤 중일 수 있으니 0.3초 뒤 한 번 더 찍어서 같은 화면일 때(안정됐을 때) 읽음
+        # 스크롤 중일 수 있으니 0.12초 뒤 한 번 더 찍어서 같은 화면일 때(안정됐을 때) 읽음
         if signature_distance(sig, self._pending_sig) > 3.0:
             self._pending_sig = sig
-            time.sleep(0.3)
+            time.sleep(0.12)
             img = self._grab(rect)
             self._mask_own_panel(img, rect)
             sig = image_signature(img)
@@ -478,6 +526,6 @@ class ScreenReader:
         self.status = "읽는 중..."
         res = self.scan_image(img)
         self.status = "자동 읽기 중"
-        self._log(f"scan title={res.title_text!r} vendor={res.vendor!r} chat_left={res.chat_left:.0f} "
-                  f"bubbles={[(b.side, b.text[:20]) for b in res.bubbles]}")
+        self._log(f"scan vendor={res.vendor!r} 배율={res.timing.get('scale')} 글자읽기={res.timing.get('read')}초 "
+                  f"전체={res.timing.get('total')}초 덩어리={[(i.kind, i.side) for i in res.items]}")
         self.on_scan(res)

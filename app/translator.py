@@ -60,7 +60,15 @@ def build_request(*, cfg: dict, user_instructions: str, vendor: str, history: li
         },
         "betas": [FALLBACK_BETA],
         "fallbacks": "default",
+        **_fast_thinking(cfg),
     }
+
+
+def _fast_thinking(cfg: dict) -> dict:
+    """짧은 업무 번역은 생각 과정 없이 바로 답하게 해서 빠르게 (Claude Sonnet 5.5 에서만 쓰는 설정)."""
+    if cfg.get("model", "claude-sonnet-5-5") == "claude-sonnet-5-5":
+        return {"thinking": {"type": "between_tools"}}
+    return {}
 
 
 class Translator:
@@ -93,7 +101,7 @@ class Translator:
 
 
 TITLE_PROMPT = ("이 그림은 위챗(WeChat) 대화방 맨 위의 제목 줄입니다. 대화방(상대방) 이름만 그대로 적어 주세요. "
-                "설명이나 따옴표 없이 이름만 씁니다. 이름이 보이지 않으면 아무것도 쓰지 마세요.")
+                "설명, 따옴표, 뒤로 가기 화살표(<) 같은 기호 없이 이름만 씁니다. 이름이 보이지 않으면 아무것도 쓰지 마세요.")
 
 
 def build_title_request(cfg: dict, png: bytes) -> dict:
@@ -109,6 +117,7 @@ def build_title_request(cfg: dict, png: bytes) -> dict:
         "output_config": {"effort": "low"},
         "betas": [FALLBACK_BETA],
         "fallbacks": "default",
+        **_fast_thinking(cfg),
     }
 
 

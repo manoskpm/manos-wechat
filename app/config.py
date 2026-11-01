@@ -12,10 +12,10 @@ from pathlib import Path
 
 APP_NAME = "ManosWeChatTranslator"
 
-CONFIG_VERSION = 7
+CONFIG_VERSION = 8
 # 화면 인식 관련 값은 버전이 바뀌면 새 기본값으로 다시 맞춤
 LAYOUT_KEYS = ("chat_left_ratio", "title_height", "input_height", "ocr_min_score", "ocr_min_height",
-               "title_map", "known_vendors")
+               "title_map", "known_vendors", "poll_seconds")
 
 DEFAULTS = {
     "config_version": CONFIG_VERSION,
@@ -30,7 +30,7 @@ DEFAULTS = {
     # 업체 중국어를 Ctrl+C 하면 자동 번역 (자동 읽기가 실패할 때를 위한 보조 기능)
     "clipboard_watch": True,
     "panel_width": 400,
-    "poll_seconds": 1.5,
+    "poll_seconds": 0.5,
     # 위챗 창 안에서 '대화 영역'의 위치 (위챗 창 기준, 픽셀). 화면에 맞춰 조정 가능.
     # (0 = 자동. 대화 영역 왼쪽 끝은 대화방 목록의 날짜 위치로 자동으로 찾고, 못 찾으면 이 비율 사용)
     "chat_left_ratio": 0.41,

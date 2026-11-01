@@ -160,7 +160,8 @@ def is_chinese_text(text: str) -> bool:
     return bool(CJK_RE.search(text)) and not HANGUL_RE.search(text) and len(text.strip()) <= 2000
 
 
-CARD_RE = re.compile(r"单号|订单号|日期[:：]|分享.{0,6}单|小程序|Mini Program|\[Link\]|\[链接\]")
+CARD_RE = re.compile(r"单号|订单号|日期[:：]|分享.{0,6}单|小程序|Mini Program|\[Link\]|\[链接\]|微信电脑版|Weixin PC"
+                     r"|\.(xlsx?|docx?|pptx?|pdf|zip|rar|txt|csv)\b|^\d+(\.\d+)?\s?[KMG]B?$", re.I)
 
 
 def is_card_text(text: str) -> bool:

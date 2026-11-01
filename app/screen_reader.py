@@ -109,10 +109,10 @@ def bubble_side_by_color(img, line, offset_x: float, bg=None):
     else:
         return "photo"
     rcore = right[1:-1] or right
-    if max(max(p[c] for p in rcore) - min(p[c] for p in rcore) for c in range(3)) > 24:
-        return "photo"
-    rmean = tuple(sum(p[c] for p in rcore) / len(rcore) for c in range(3))
-    if not _close(rmean, (r, g, b), 12):
+    # 배경 바로 앞(말풍선 오른쪽 안쪽 여백)이 말풍선 색이면 진짜 말풍선
+    # (글자 뒤에 붙은 이모지 같은 작은 그림은 허용)
+    tail = rcore[-4:]
+    if not all(_close(p, (r, g, b), 14) for p in tail):
         return "photo"
     # 왼쪽 여백 세로줄도 위아래로 같은 색이 이어지다 배경으로 끝나야 함 (사진 테두리 걸러냄)
     col = int(line.x0 + offset_x) - 4
@@ -314,10 +314,21 @@ class ScreenReader:
 
     def scan_image(self, img) -> ScanResult:
         import numpy as np
-        result, _ = self._get_ocr()(np.array(img))
+        # 속도: 위챗 글자는 항상 바로 서 있으므로 글자 방향 확인 단계는 생략
+        result, _ = self._get_ocr()(np.array(img), use_cls=False)
         res = analyze_window(img, result, self.cfg, self._chat_left)
         self._chat_left = res.chat_left
-        res.title_text = self._title_text(img, res)
+        # 중국어 인식으로 읽은 제목은 중국어가 대부분일 때만 이름으로 씀 ('나무 옷걸이 lyt' → 'l lyt' 방지)
+        v = res.vendor.replace(" ", "")
+        cjk = sum(1 for ch in v if "\u4e00" <= ch <= "\u9fff")
+        if len(v) < 2 or cjk < len(v) * 0.5:
+            res.vendor = ""
+        # 한글 이름은 패널이 따로(기다리지 않고) Claude 로 읽음 → 제목 그림만 넘김
+        import io
+        title = img.crop((int(res.chat_left), res.band_h, int(min(img.width, res.chat_left + 500)), res.title_h))
+        buf = io.BytesIO()
+        title.save(buf, format="PNG")
+        res.title_png = buf.getvalue()
         return res
 
     def _title_text(self, img, res) -> str:
@@ -418,10 +429,16 @@ class ScreenReader:
         if signature_distance(sig, self._last_sig) <= 3.0:
             self.status = "자동 읽기 중"
             return
-        # 스크롤 중일 수 있으니 한 번 더 같은 화면일 때(안정됐을 때) 읽음
+        # 스크롤 중일 수 있으니 0.3초 뒤 한 번 더 찍어서 같은 화면일 때(안정됐을 때) 읽음
         if signature_distance(sig, self._pending_sig) > 3.0:
             self._pending_sig = sig
-            return
+            time.sleep(0.3)
+            img = self._grab(rect)
+            self._mask_own_panel(img, rect)
+            sig = image_signature(img)
+            if signature_distance(sig, self._pending_sig) > 3.0:
+                self._pending_sig = sig
+                return
         self._last_sig = sig
         self.last_image = img
         self.status = "읽는 중..."

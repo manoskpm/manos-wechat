@@ -189,3 +189,21 @@ def test_real_wechat_moments_pane_and_webview():
     result, _ = RapidOCR()(np.array(img))
     res = analyze_window(img, result, dict(DEFAULTS))
     assert [b.text for b in res.bubbles if b.side == "in"] == ["物流公司让今天送货"]
+
+
+def test_real_wechat_emoji_message():
+    """실제 화면 5: 글자 뒤에 이모지가 붙은 업체 메시지(给你安排😁)도 읽음."""
+    pytest.importorskip("rapidocr_onnxruntime")
+    path = Path(__file__).parent / "fixtures" / "real_wechat5.png"
+    if not path.exists():
+        pytest.skip("real_wechat5.png 없음")
+    import numpy as np
+    from PIL import Image
+    from rapidocr_onnxruntime import RapidOCR
+
+    from app.config import DEFAULTS
+    from app.screen_reader import analyze_window
+
+    img = Image.open(path).convert("RGB")
+    res = analyze_window(img, RapidOCR()(np.array(img))[0], dict(DEFAULTS))
+    assert [b.text for b in res.bubbles if b.side == "in"] == ["空白包装发货", "可以", "给你安排", "好的"]

@@ -157,6 +157,7 @@ class Panel(QWidget):
         self._raw_key = ""
         self._title_asked: set = set()
         self._renamed: dict = {}
+        self._title_pending: set = set()
         self._wechat_seen = False
         self._gone_since = None
         self._hidden = False
@@ -457,7 +458,8 @@ class Panel(QWidget):
     # ------------------------------------------------------------ 거래처 / 기록
     def set_vendor(self, vendor: str):
         self.vendor = vendor
-        self.vendor_lbl.setText(vendor or "위챗 대화방을 클릭하세요")
+        label = "이름 확인 중…" if vendor in self._title_pending else vendor
+        self.vendor_lbl.setText(label or "위챗 대화방을 클릭하세요")
         # 대화방을 아직 못 읽었을 때는 예전 '미지정' 기록을 보여주지 않음
         self.history = C.load_history(vendor) if vendor else []
         for h in self.history:
@@ -571,26 +573,44 @@ class Panel(QWidget):
         # 글자로 못 읽은 대화방: 제목 줄 그림을 Claude 에게 한 번 보여주고 이름을 받음
         if not raw and canon.startswith("대화방 ") and res.title_png and canon not in self._title_asked:
             self._title_asked.add(canon)
+            self._title_pending.add(canon)
             self._ask_title_name(canon, res.title_png)
         self._raw_key = canon
         return cfg.get("aliases", {}).get(canon, canon)
 
     def _ask_title_name(self, temp_name: str, png: bytes):
-        if not self.translator:
-            return
-
         def work():
-            try:
-                name = read_title(self.translator, self.cfg, png)
-            except Exception as e:
-                self._write_log(f"Claude 이름 읽기 실패: {e}")
-                return
-            if name:
-                self.q.put(("title_name", temp_name, name))
+            name = ""
+            if self.translator:
+                try:
+                    name = read_title(self.translator, self.cfg, png)
+                except Exception as e:
+                    self._write_log(f"Claude 이름 읽기 실패: {e}")
+            if not name:  # Claude 를 못 쓰면 윈도우 글자 인식으로
+                try:
+                    import io
+
+                    from PIL import Image
+
+                    from . import korean_ocr
+                    img = Image.open(io.BytesIO(png))
+                    name = korean_ocr.clean_title(korean_ocr.read_text(img.resize((img.width * 2, img.height * 2))))
+                    compact = name.replace(" ", "")
+                    if len(compact) < 2 or sum(1 for c in compact if "\uac00" <= c <= "\ud7a3") < len(compact) * 0.5:
+                        name = ""
+                except Exception as e:
+                    self._write_log(f"윈도우 이름 읽기 실패: {e}")
+            name = name.lstrip("<‹〈 ").strip()
+            self.q.put(("title_name", temp_name, name))
         threading.Thread(target=work, daemon=True).start()
 
     def _apply_title_name(self, temp_name: str, name: str):
         """임시 이름(대화방 N)을 Claude 가 읽은 진짜 이름으로 바꾸고 기록도 옮김."""
+        self._title_pending.discard(temp_name)
+        if not name:
+            if self.vendor == temp_name:
+                self.vendor_lbl.setText(temp_name)
+            return
         changed = False
         for e in self.cfg.get("title_map", []):
             if e["name"] == temp_name:
@@ -638,13 +658,14 @@ class Panel(QWidget):
             self._save()
             self._render_all()
         # 화면에 보이는 업체 메시지는 바로 자동 번역 (메시지마다 한 번, 한 번에 최대 6개)
-        visible = [b.text for b in res.bubbles if b.side == "in"]
-        todo = [h for h in self.history if h["side"] == "in" and not h.get("ko") and not h.get("pending")
-                and any(similar(h["zh"], t) for t in visible)]
+        # 업체 메시지와 대표님이 위챗에 직접 쓴 메시지 모두 (며칠 뒤에도 맥락을 볼 수 있게)
+        visible = [(b.side, b.text) for b in res.bubbles if b.side in ("in", "out")]
+        todo = [h for h in self.history if not h.get("ko") and not h.get("pending") and h.get("src") != "panel"
+                and any(h["side"] == sd and similar(h["zh"], t) for sd, t in visible)]
         for e in auto:
             if e not in todo and not e.get("ko") and not e.get("pending"):
                 todo.append(e)
-        for e in todo[-6:]:
+        for e in todo[-8:]:
             self._translate_entry(e)
 
     def _translate_entry_by_id(self, entry_id):

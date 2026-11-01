@@ -174,22 +174,63 @@ def detect_chat_left_by_color(img) -> float | None:
     return None
 
 
+def detect_chat_right_by_color(img, chat_left: float) -> float | None:
+    """대화 영역 오른쪽 끝 찾기: 위챗 4.2 에서 모멘트 등 다른 창이 대화창 오른쪽에 붙어 열린 경우,
+    대화 배경색이 끝나는 세로 경계. 없으면 None (창 끝까지 대화 영역)."""
+    from collections import Counter
+    gray = img.convert("L")
+    w, h = gray.size
+    ys = range(int(h * 0.15), int(h * 0.85), 5)
+
+    def mode(x):
+        c = Counter(gray.getpixel((x, y)) for y in ys).most_common(1)[0]
+        return c[0], c[1] / len(ys)
+
+    bg = mode(int(chat_left) + 8)[0]
+    start = int(chat_left) + 200
+    modes = [mode(x) for x in range(start, w - 4)]
+    # 대화 배경이 아닌 '한 가지 색으로 꽉 찬' 세로줄이 이어지면 경계 (말풍선이 지나는 줄은 색이 섞여서 제외됨)
+    for i in range(len(modes) - 6):
+        if all(abs(m[0] - bg) > 2 and m[1] >= 0.85 for m in modes[i:i + 6]):
+            return float(start + i)
+    return None
+
+
+def looks_like_wechat_main(img) -> bool:
+    """위챗 대화창(본 창)인지 확인: 왼쪽에 회색 아이콘 줄이 있고, 그 오른쪽에서 대화 영역이 시작됨.
+    (위챗 안의 웹페이지 창·모멘트 창·사진 보기 창은 이 모양이 아님)"""
+    rgb = img.convert("RGB")
+    w, h = rgb.size
+    if w < 300 or h < 300:
+        return False
+    xs = range(6, min(60, int(w * 0.08)), 3)
+    ys = range(int(h * 0.2), int(h * 0.8), 6)
+    pixels = [rgb.getpixel((x, y)) for x in xs for y in ys]
+    # 아이콘 줄 = 대부분 무채색이고 흰색이 아님 (위챗 버전에 따라 단색이거나 살짝 그러데이션)
+    navlike = sum(1 for p in pixels if max(p) - min(p) <= 10 and max(p) < 240)
+    if navlike / len(pixels) < 0.7:
+        return False
+    return detect_chat_left_by_color(rgb) is not None
+
+
 def analyze_window(img, ocr_result, cfg: dict, last_chat_left: float | None = None) -> ScanResult:
     """위챗 창 전체 사진 + 글자 인식 결과 → 거래처 이름과 말풍선."""
     w, h = img.width, img.height
     lines = to_lines(ocr_result, cfg["ocr_min_score"], cfg.get("ocr_min_height", 12))
     chat_left = (detect_chat_left(lines, w) or detect_chat_left_by_color(img)
                  or last_chat_left or w * cfg["chat_left_ratio"])
+    chat_right = detect_chat_right_by_color(img, chat_left) or w
+    lines = [l for l in lines if l.x1 <= chat_right + 4]
     title_h = cfg.get("title_height") or detect_header_bottom(img, chat_left) or int(h * 0.09)
     input_top = detect_input_top(img, chat_left)
     input_h = cfg.get("input_height") or (h - input_top + 4 if input_top else int(h * 0.24))
     rgb = img.convert("RGB")
     bg = background_color(rgb, chat_left, title_h)
     vendor, bubbles = parse_chat(
-        crop_lines(lines, chat_left), w - chat_left, h, title_h, input_h,
+        crop_lines(lines, chat_left), chat_right - chat_left, h, title_h, input_h,
         side_fn=lambda l: bubble_side_by_color(rgb, l, chat_left, bg))
     # 제목 왼쪽 부분만 (창 크기를 바꿔도 같은 대화방이면 같은 모양이 되도록 고정 폭)
-    title_img = img.crop((int(chat_left), 0, int(min(w, chat_left + 360)), title_h))
+    title_img = img.crop((int(chat_left), 0, int(min(chat_right, chat_left + 360)), title_h))
     return ScanResult(vendor, image_signature(title_img, (96, 12)), bubbles, chat_left, title_h)
 
 
@@ -209,6 +250,9 @@ class ScreenReader:
         self._title_cache: list = []
         self.status = "준비 중"
         self.last_image = None
+
+    def is_main_window(self, rect) -> bool:
+        return looks_like_wechat_main(self._grab(rect))
 
     def _grab(self, rect):
         import mss

@@ -168,3 +168,24 @@ def test_real_wechat_narrow_layout():
     res = analyze_window(img, result, dict(DEFAULTS))
     assert 70 <= res.chat_left <= 85
     assert [b.text for b in res.bubbles if b.side == "in"] == ["物流公司让今天送货"]
+
+
+def test_real_wechat_moments_pane_and_webview():
+    """실제 화면 4: 모멘트 창이 오른쪽에 붙어도 대화창 글만 읽음 / 위챗 안 웹페이지 창은 대화창이 아님."""
+    pytest.importorskip("rapidocr_onnxruntime")
+    d = Path(__file__).parent / "fixtures"
+    if not (d / "real_wechat4.png").exists() or not (d / "real_webview.png").exists():
+        pytest.skip("실제 화면 없음")
+    import numpy as np
+    from PIL import Image
+    from rapidocr_onnxruntime import RapidOCR
+
+    from app.config import DEFAULTS
+    from app.screen_reader import analyze_window, looks_like_wechat_main
+
+    img = Image.open(d / "real_wechat4.png").convert("RGB")
+    assert looks_like_wechat_main(img)
+    assert not looks_like_wechat_main(Image.open(d / "real_webview.png"))
+    result, _ = RapidOCR()(np.array(img))
+    res = analyze_window(img, result, dict(DEFAULTS))
+    assert [b.text for b in res.bubbles if b.side == "in"] == ["物流公司让今天送货"]

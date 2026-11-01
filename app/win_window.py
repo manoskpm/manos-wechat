@@ -9,6 +9,15 @@ import sys
 
 WECHAT_TITLES = ("微信", "WeChat", "Weixin")
 
+_main_hwnd = None   # 위챗 대화창(본 창)으로 확인된 창 번호
+_validator = None   # 창 위치를 받아 '위챗 대화창이 맞는지' 화면으로 확인하는 함수
+
+
+def set_main_validator(fn) -> None:
+    global _validator
+    _validator = fn
+
+
 if sys.platform == "win32":
     import ctypes
     from ctypes import wintypes
@@ -84,10 +93,24 @@ if sys.platform == "win32":
         user32.EnumWindows(cb, 0)
         if not found:
             return None
-        # 업데이트 안내창 같은 딸린 창(주인 창이 있는 창)보다 위챗 본 창을 우선
-        main = [f for f in found if not user32.GetWindow(f[0], 4)]  # GW_OWNER
-        found = main or found
-        return max(found, key=lambda f: (f[1][2] - f[1][0]) * (f[1][3] - f[1][1]))
+        # 위챗 4.2 는 대화창·웹페이지 창·모멘트 창 이름이 모두 같음 → 대화창(본 창)만 골라냄
+        global _main_hwnd
+        for f in found:
+            if f[0] == _main_hwnd:
+                return f
+        found = [f for f in found if not user32.GetWindow(f[0], 4)] or found  # 딸린 창(GW_OWNER) 제외
+        found.sort(key=lambda f: (f[1][2] - f[1][0]) * (f[1][3] - f[1][1]), reverse=True)
+        if _validator is None:
+            return found[0]
+        for f in found:
+            try:
+                ok = _validator(f[1])
+            except Exception:
+                ok = False
+            if ok:
+                _main_hwnd = f[0]
+                return f
+        return None
 
     def wechat_state() -> str:
         """위챗 창 상태: "visible"(보임), "minimized"(최소화), "gone"(닫힘 또는 트레이로 숨김)."""

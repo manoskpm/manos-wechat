@@ -74,6 +74,7 @@ class App:
 
         self.reader = ScreenReader(self.cfg, self._on_scan_thread, self._own_hwnd,
                                    log_path=self.log_path)
+        win_window.set_main_validator(self.reader.is_main_window)
         self.reader.start()
 
         # 반복 작업을 먼저 시작하고, API 키 확인은 그 다음에 (창이 멈추지 않게)

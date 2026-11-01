@@ -51,7 +51,6 @@ def test_segment_mixed_chat():
                    ("file", "in"), ("text", "in"), ("photo", "in")]
     assert items[0].text == "空白包装发货" and items[0].y0 == 40
     assert items[1].extra["bg"][1] > 200                 # 내 말풍선 초록색 그대로
-    assert items[3].png                                  # 사진은 잘라서 그대로 보여줌
 
 
 def test_ko_time():

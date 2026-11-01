@@ -390,15 +390,11 @@ class ScreenReader:
         cjk = sum(1 for ch in v if "\u4e00" <= ch <= "\u9fff")
         if len(v) < 2 or cjk < len(v) * 0.5:
             res.vendor = ""
-        # 위치를 실제 화면 크기로 되돌림. 사진은 원래 화면에서 잘라 선명하게.
+        # 위치를 실제 화면 크기로 되돌림
         import io
         S = lambda v: int(round(v * scale))
         for it in items:
             it.y0, it.y1, it.x0, it.x1 = S(it.y0), S(it.y1), S(it.x0), S(it.x1)
-            if it.png and scale != 1.0:
-                buf = io.BytesIO()
-                full.crop((it.x0, it.y0, it.x1, it.y1)).save(buf, format="PNG")
-                it.png = buf.getvalue()
         res.items = items
         res.chat_left = res.chat_left * scale
         res.title_h, res.band_h = S(res.title_h), S(res.band_h)

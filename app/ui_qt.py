@@ -189,22 +189,15 @@ class MirrorView(QWidget):
 
     def _make(self, v: dict, h: int, maxw: int):
         kind = v["kind"]
-        if kind in ("photo", "video", "sticker") and v.get("png"):
-            from PySide6.QtGui import QPixmap
-            pm = QPixmap()
-            pm.loadFromData(v["png"])
-            pm = pm.scaled(int(min(maxw, max(20, v["w"]))), h, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        if kind in ("photo", "video", "sticker"):
+            # 사진·영상·이모티콘은 위챗 창에 그대로 보이므로 같은 크기의 빈 네모 칸에 표시만
             lab = QLabel(self)
-            lab.setPixmap(pm)
-            lab.setFixedSize(pm.size())
-            lab.setStyleSheet("border-radius: 4px;")
-            if kind != "photo":
-                tag = QLabel(v.get("text", ""), lab)
-                tag.setStyleSheet("background: rgba(0,0,0,0.55); color: white; font-size: 11px;"
-                                  "border-radius: 3px; padding: 1px 4px;")
-                tag.adjustSize()
-                tag.move(4, max(0, pm.height() - tag.height() - 4))
-            lab.setToolTip(v.get("text", ""))
+            lab.setText(v.get("text", "") + "\n위챗 참고")
+            lab.setFont(self._font(12))
+            lab.setAlignment(Qt.AlignCenter)
+            lab.setFixedSize(int(min(maxw, max(60, v["w"]))), h)
+            lab.setStyleSheet("background: transparent; color: #a3a3a3; border: 1px solid #e3e3e3;"
+                              "border-radius: 6px;")
             return lab
         text = v.get("text", "")
         lab = QLabel(self)

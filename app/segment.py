@@ -197,11 +197,6 @@ def segment_chat(img, lines: list[Line], chat_left: float, chat_right: float, to
             it.side = avatar_side or ("in" if gap_l < gap_r else "out")
         if it.kind in ("text", "file", "link", "voice"):
             it.extra["bg"] = mode   # 위챗 말풍선 색 그대로 (업체 회색/흰색, 내 초록)
-        if it.kind in ("photo", "video", "sticker"):
-            import io
-            buf = io.BytesIO()
-            img.crop((ax0, ay0, ax1, ay1)).save(buf, format="PNG")
-            it.png = buf.getvalue()
         items.append(it)
     return items
 

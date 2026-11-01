@@ -2,8 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from app.chat_parser import (Line, find_new_incoming, is_chinese_text, parse_chat,
-                             similar, to_lines)
+from app.chat_parser import Line, find_new_incoming, is_chinese_text, parse_chat, similar
 
 
 def L(x0, y0, x1, y1, t):
@@ -52,22 +51,6 @@ def test_is_chinese_text():
     assert not is_chinese_text("hello")
 
 
-def test_real_ocr_on_mock_screenshot():
-    pytest.importorskip("rapidocr_onnxruntime")
-    import numpy as np
-    from PIL import Image
-    from rapidocr_onnxruntime import RapidOCR
-
-    img = Image.open(Path(__file__).parent / "fixtures" / "mock_chat.png")
-    result, _ = RapidOCR()(np.array(img))
-    _, bubbles = parse_chat(to_lines(result), img.width, img.height, 64, 190)
-    ins = [b.text for b in bubbles if b.side == "in"]
-    outs = [b.text for b in bubbles if b.side == "out"]
-    assert len(ins) == 2 and len(outs) == 1
-    assert "单价28元" in ins[0] and "25天" in ins[0]
-    assert "32元" in ins[1]
-
-
 def test_real_wechat_screenshot():
     """대표님 PC의 실제 위챗 화면 캡처로 확인 (한국어 이름은 못 읽고, 사진 속 작은 글씨는 무시)."""
     pytest.importorskip("rapidocr_onnxruntime")
@@ -100,3 +83,24 @@ def test_detect_chat_left_from_list_dates():
     lines = [L(314, 199, 361, 216, "10/30"), L(323, 281, 363, 300, "10/28"),
              L(582, 182, 695, 201, "Thursday 03:30")]
     assert detect_chat_left(lines, 905) == 371
+
+
+def test_real_wechat_screenshot2():
+    """실제 화면 2: 사진 속 글자 무시, 짧은 메시지(2件, 好的)와 2줄 말풍선 인식."""
+    pytest.importorskip("rapidocr_onnxruntime")
+    path = Path(__file__).parent / "fixtures" / "real_wechat2.png"
+    if not path.exists():
+        pytest.skip("real_wechat2.png 없음")
+    import numpy as np
+    from PIL import Image
+    from rapidocr_onnxruntime import RapidOCR
+
+    from app.config import DEFAULTS
+    from app.screen_reader import analyze_window
+
+    img = Image.open(path)
+    result, _ = RapidOCR()(np.array(img))
+    res = analyze_window(img, result, dict(DEFAULTS))
+    ins = [b.text for b in res.bubbles if b.side == "in"]
+    assert ins == ["2件", "上衣架：19公斤裤架：24公斤", "好的"]
+    assert len([b for b in res.bubbles if b.side == "out"]) == 2

@@ -32,21 +32,87 @@ def signature_distance(a, b) -> float:
     return sum(abs(x - y) for x, y in zip(a, b)) / len(a)
 
 
-def bubble_side_by_color(img, line, offset_x: float):
-    """말풍선 바탕색으로 판단: 초록 = 내가 보낸 것, 흰색/회색 = 업체."""
-    x0, x1 = int(line.x0 + offset_x), int(line.x1 + offset_x)
-    y0, y1 = int(line.y0), int(line.y1)
-    if x1 - x0 < 4 or y1 - y0 < 4:
+def _close(a, b, tol=6) -> bool:
+    return all(abs(a[i] - b[i]) <= tol for i in range(3))
+
+
+def bubble_side_by_color(img, line, offset_x: float, bg=None):
+    """글자 왼쪽의 말풍선 여백을 보고 판단.
+
+    진짜 말풍선은 글자 왼쪽에 '짧고 고른 색 띠(말풍선 여백)'가 있고 그 다음이 대화 배경입니다.
+    사진 속 글자는 그 띠가 길거나 색이 고르지 않습니다.
+    초록 띠 = 내가 보낸 것, 흰색/회색 띠 = 업체.
+    """
+    rgb = img if img.mode == "RGB" else img.convert("RGB")
+    x0 = int(line.x0 + offset_x)
+    h = line.y1 - line.y0
+    y = int((line.y0 + line.y1) / 2)
+    if bg is None or x0 < 3 or h < 4:
         return None
-    pixels = list(img.crop((x0, y0, x1, y1)).convert("RGB").resize((24, 6)).getdata())
-    r = sum(p[0] for p in pixels) / len(pixels)
-    g = sum(p[1] for p in pixels) / len(pixels)
-    b = sum(p[2] for p in pixels) / len(pixels)
+    max_run = int(h * 2.5) + 6
+    run = []
+    x = x0 - 2
+    while x > offset_x and len(run) <= max_run:
+        p = rgb.getpixel((x, y))
+        if _close(p, bg) and len(run) >= 2:
+            break
+        run.append(p)
+        x -= 1
+    else:
+        return "photo"  # 대화 배경까지 너무 멀다 = 사진 속 글자
+    core = run[1:-1] or run
+    spread = max(max(p[c] for p in core) - min(p[c] for p in core) for c in range(3))
+    if spread > 24:
+        return "photo"
+    r = sum(p[0] for p in core) / len(core)
+    g = sum(p[1] for p in core) / len(core)
+    b = sum(p[2] for p in core) / len(core)
     if g > r + 25 and g > b + 25:
         return "out"
     if abs(r - g) < 15 and abs(g - b) < 15:
         return "in"
+    return "photo"
+
+
+def background_color(img, chat_left: float, top: int):
+    """대화 영역 배경색 (제목선 바로 아래, 왼쪽 가장자리)."""
+    rgb = img if img.mode == "RGB" else img.convert("RGB")
+    x = int(min(img.width - 1, chat_left + 6))
+    ys = range(int(top) + 4, min(img.height - 1, int(top) + 40), 3)
+    pixels = [rgb.getpixel((x, y)) for y in ys]
+    return max(set(pixels), key=pixels.count) if pixels else None
+
+
+def _find_divider(img, chat_left: float, y_from: int, y_to: int) -> int | None:
+    """대화 영역에서 가로로 쭉 이어진 얇은 선(제목 아래 선, 입력창 테두리)을 위에서부터 찾음."""
+    gray = img.convert("L")
+    x0 = int(chat_left + (img.width - chat_left) * 0.2)
+    x1 = int(chat_left + (img.width - chat_left) * 0.6)
+    if x1 - x0 < 20:
+        return None
+    xs = range(x0, x1, max(1, (x1 - x0) // 40))
+
+    def row(y):
+        vals = [gray.getpixel((x, y)) for x in xs]
+        return sum(vals) / len(vals), max(vals) - min(vals)
+
+    for y in range(max(2, y_from), min(img.height - 2, y_to)):
+        mean, spread = row(y)
+        if spread > 4:
+            continue
+        if abs(mean - row(y - 2)[0]) >= 5 and abs(mean - row(y + 2)[0]) >= 5:
+            return y
     return None
+
+
+def detect_header_bottom(img, chat_left: float) -> int | None:
+    """대화방 제목 아래의 얇은 구분선 (제목과 대화 내용을 구분)."""
+    return _find_divider(img, chat_left, 20, int(img.height * 0.25))
+
+
+def detect_input_top(img, chat_left: float) -> int | None:
+    """메시지 입력창의 윗 테두리 (입력창에 붙여넣은 글은 읽지 않기 위해)."""
+    return _find_divider(img, chat_left, int(img.height * 0.6), int(img.height * 0.97))
 
 
 def analyze_window(img, ocr_result, cfg: dict, last_chat_left: float | None = None) -> ScanResult:
@@ -54,11 +120,14 @@ def analyze_window(img, ocr_result, cfg: dict, last_chat_left: float | None = No
     w, h = img.width, img.height
     lines = to_lines(ocr_result, cfg["ocr_min_score"], cfg.get("ocr_min_height", 12))
     chat_left = detect_chat_left(lines, w) or last_chat_left or w * cfg["chat_left_ratio"]
-    title_h = cfg.get("title_height") or int(h * 0.12)
-    input_h = cfg.get("input_height") or int(h * 0.24)
+    title_h = cfg.get("title_height") or detect_header_bottom(img, chat_left) or int(h * 0.09)
+    input_top = detect_input_top(img, chat_left)
+    input_h = cfg.get("input_height") or (h - input_top + 4 if input_top else int(h * 0.24))
+    rgb = img.convert("RGB")
+    bg = background_color(rgb, chat_left, title_h)
     vendor, bubbles = parse_chat(
         crop_lines(lines, chat_left), w - chat_left, h, title_h, input_h,
-        side_fn=lambda l: bubble_side_by_color(img, l, chat_left))
+        side_fn=lambda l: bubble_side_by_color(rgb, l, chat_left, bg))
     title_img = img.crop((int(chat_left), 0, w, title_h))
     return ScanResult(vendor, image_signature(title_img, (96, 12)), bubbles, chat_left)
 

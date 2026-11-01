@@ -299,14 +299,13 @@ class App:
         self.q.put(("scan", res))
 
     def _vendor_from_title(self, res):
-        if res.vendor:
-            return res.vendor
+        # 대표님이 직접 정한 이름이 있으면 그것을 먼저 사용
         from .screen_reader import signature_distance
         best = min(self.cfg.get("title_map", []), default=None,
                    key=lambda e: signature_distance(e["sig"], res.title_sig))
         if best and signature_distance(best["sig"], res.title_sig) <= 6.0:
             return best["name"]
-        return None
+        return res.vendor or None
 
     def _handle_scan(self, res):
         from .screen_reader import signature_distance
@@ -450,7 +449,12 @@ class App:
                     x = 0                 # 양쪽 다 자리가 없으면 화면 왼쪽 끝 (위챗 대화방 목록 위에 겹침)
                 geom = f"{w}x{b - t}+{x}+{t}"
                 if geom != self._last_geom:
-                    self.root.geometry(geom)
+                    own = self._own_hwnd()
+                    if sys.platform == "win32" and own:
+                        # 제목줄까지 포함해서 위챗과 위아래 끝이 딱 맞게
+                        win_window.place_visible(own, x, t, w, b - t)
+                    else:
+                        self.root.geometry(geom)
                     self._last_geom = geom
                     self._write_log(f"dock wechat={(l, t, r, b)} screen={sw} panel={geom}")
 

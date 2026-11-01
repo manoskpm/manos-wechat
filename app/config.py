@@ -12,7 +12,7 @@ from pathlib import Path
 
 APP_NAME = "ManosWeChatTranslator"
 
-CONFIG_VERSION = 2
+CONFIG_VERSION = 3
 # 화면 인식 관련 값은 버전이 바뀌면 새 기본값으로 다시 맞춤
 LAYOUT_KEYS = ("chat_left_ratio", "title_height", "input_height", "ocr_min_score", "ocr_min_height")
 
@@ -35,7 +35,7 @@ DEFAULTS = {
     "chat_left_ratio": 0.41,
     "title_height": 0,
     "input_height": 0,
-    "ocr_min_score": 0.65,
+    "ocr_min_score": 0.5,
     "ocr_min_height": 12,
     # 한국어 메모 이름처럼 글자로 못 읽는 대화방 제목 → 대표님이 정한 거래처 이름
     "title_map": [],

@@ -118,6 +118,9 @@ def parse_chat(lines: list[Line], width: float, height: float,
             bubbles[-1].y1 = l.y1
         else:
             side = side_fn(l) if side_fn else None
+            if side == "photo":  # 사진 속 글자는 메시지가 아님
+                prev = None
+                continue
             if side is None:
                 side = "in" if l.x0 < (width - l.x1) else "out"
             bubbles.append(Bubble(side, l.text, l.y0, l.y1))

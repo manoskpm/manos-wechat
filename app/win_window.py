@@ -14,6 +14,20 @@ if sys.platform == "win32":
     from ctypes import wintypes
 
     user32 = ctypes.windll.user32
+    dwmapi = ctypes.windll.dwmapi
+
+    # 64비트 윈도우에서 창 번호(HWND)가 잘리지 않도록 인자 형식을 지정
+    user32.GetWindowTextLengthW.argtypes = [wintypes.HWND]
+    user32.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+    user32.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
+    user32.IsWindowVisible.argtypes = [wintypes.HWND]
+    user32.IsIconic.argtypes = [wintypes.HWND]
+    user32.GetAncestor.argtypes = [wintypes.HWND, wintypes.UINT]
+    user32.GetAncestor.restype = wintypes.HWND
+    user32.GetForegroundWindow.restype = wintypes.HWND
+    user32.SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int,
+                                    ctypes.c_int, ctypes.c_int, wintypes.UINT]
+    dwmapi.DwmGetWindowAttribute.argtypes = [wintypes.HWND, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD]
 
     def enable_dpi_awareness() -> None:
         """화면 배율(125%, 150% 등)이 달라도 좌표가 어긋나지 않게 함."""
@@ -36,6 +50,22 @@ if sys.platform == "win32":
         user32.GetWindowRect(hwnd, ctypes.byref(r))
         return r.left, r.top, r.right, r.bottom
 
+    def visible_rect(hwnd):
+        """눈에 보이는 창 테두리 (윈도우 10/11의 보이지 않는 여백과 그림자를 뺀 크기)."""
+        r = wintypes.RECT()
+        if dwmapi.DwmGetWindowAttribute(hwnd, 9, ctypes.byref(r), ctypes.sizeof(r)) == 0:  # EXTENDED_FRAME_BOUNDS
+            if r.right > r.left and r.bottom > r.top:
+                return r.left, r.top, r.right, r.bottom
+        return _rect(hwnd)
+
+    def place_visible(hwnd, x, y, w, h):
+        """보이는 테두리 기준으로 (x, y)에서 가로 w, 세로 h가 되도록 창을 배치 (제목줄 포함)."""
+        ol, ot, orr, ob = _rect(hwnd)
+        vl, vt, vr, vb = visible_rect(hwnd)
+        ml, mt, mr, mb = vl - ol, vt - ot, orr - vr, ob - vb
+        user32.SetWindowPos(hwnd, None, x - ml, y - mt, w + ml + mr, h + mt + mb,
+                            0x0004 | 0x0010)  # SWP_NOZORDER | SWP_NOACTIVATE
+
     def find_wechat():
         """보이는 위챗 창 중 가장 큰 것의 (hwnd, (left, top, right, bottom))."""
         found = []
@@ -44,7 +74,7 @@ if sys.platform == "win32":
         def cb(hwnd, _):
             if user32.IsWindowVisible(hwnd) and not user32.IsIconic(hwnd):
                 if _title(hwnd).strip() in WECHAT_TITLES:
-                    l, t, r, b = _rect(hwnd)
+                    l, t, r, b = visible_rect(hwnd)
                     if r - l > 400 and b - t > 300:
                         found.append((hwnd, (l, t, r, b)))
             return True
@@ -75,6 +105,9 @@ else:  # 개발용(윈도우가 아닌 환경)에서는 아무것도 찾지 않�
 
     def window_rect(hwnd):
         return None
+
+    def place_visible(hwnd, x, y, w, h):
+        pass
 
     def find_wechat():
         return None

@@ -3,11 +3,3 @@ rapidocr_onnxruntime==1.2.3
 mss==10.2.0
 pillow==12.3.0
 numpy==2.5.3
-# 윈도우 기본 글자 인식 (한국어 대화방 이름 읽기용, 윈도우에서만 설치)
-winrt-runtime==3.2.1; sys_platform == "win32"
-winrt-windows-foundation==3.2.1; sys_platform == "win32"
-winrt-windows-foundation-collections==3.2.1; sys_platform == "win32"
-winrt-windows-globalization==3.2.1; sys_platform == "win32"
-winrt-windows-graphics-imaging==3.2.1; sys_platform == "win32"
-winrt-windows-media-ocr==3.2.1; sys_platform == "win32"
-winrt-windows-storage-streams==3.2.1; sys_platform == "win32"

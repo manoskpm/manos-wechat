@@ -148,6 +148,7 @@ class ScreenReader:
         self._last_sig = None
         self._pending_sig = None
         self._chat_left = None
+        self._title_cache: list = []
         self.status = "준비 중"
         self.last_image = None
 
@@ -170,10 +171,19 @@ class ScreenReader:
         result, _ = self._get_ocr()(np.array(img))
         res = analyze_window(img, result, self.cfg, self._chat_left)
         self._chat_left = res.chat_left
+        res.title_text = self._title_text(img, res)
+        return res
+
+    def _title_text(self, img, res) -> str:
+        """대화방 이름 읽기 (대화방이 바뀌었을 때만 윈도우 글자 인식을 실행하고, 결과는 기억)."""
+        for sig, text in self._title_cache:
+            if signature_distance(sig, res.title_sig) <= 5.0:
+                return text
         from .korean_ocr import clean_title, read_text
         title = img.crop((int(res.chat_left), 0, int(min(img.width, res.chat_left + 500)), res.title_h))
-        res.title_text = clean_title(read_text(title.resize((title.width * 2, title.height * 2))))
-        return res
+        text = clean_title(read_text(title.resize((title.width * 2, title.height * 2))))
+        self._title_cache = (self._title_cache + [(res.title_sig, text)])[-100:]
+        return text
 
     def grab_now(self):
         found = win_window.find_wechat()

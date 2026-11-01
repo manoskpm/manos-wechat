@@ -56,3 +56,41 @@ def test_segment_mixed_chat():
 def test_ko_time():
     assert ko_time("Thursday 11:08") == "목요일 11:08"
     assert ko_time("昨天 09:12") == "어제 09:12"
+
+
+EXPECTED = {
+    "gabang": "photo/in text/in text/out text/in text/in time/center text/out text/in time/center photo/in",
+    "real2": "photo/in text/in time/center text/out text/in text/out text/in",
+    "nahee": "time/center photo/in file/in",
+    "hui": "photo/out photo/in photo/in",
+    "narrow": "text/in photo/out",
+    "u33": "text/in photo/out text/in text/out text/out text/in text/out link/in notice/in",
+    "u34": "text/in text/in photo/in photo/in photo/in",
+}
+
+
+def test_real_screens_all_display_scales():
+    """실제 위챗 화면(저장소에 올리지 않는 개인 자료)을 배율 100·125·150·200% 로 바꿔도 같은 결과."""
+    import os
+    import pytest
+    from PIL import Image
+    here = os.path.join(os.path.dirname(__file__), "fixtures")
+    files = {n: os.path.join(here, f"real_{n}.png") for n in EXPECTED}
+    files = {n: f for n, f in files.items() if os.path.exists(f)}
+    if not files:
+        pytest.skip("개인 화면 자료 없음")
+    try:
+        from app.config import DEFAULTS
+        from app.screen_reader import ScreenReader
+        r = ScreenReader(dict(DEFAULTS), None, lambda: None)
+        r._get_ocr()
+    except Exception as e:
+        pytest.skip(f"글자 인식 사용 불가: {e}")
+    for name, f in files.items():
+        base = Image.open(f).convert("RGB")
+        scales = (1.0, 1.25, 1.5, 2.0) if not name.startswith("u") else (1.0,)
+        for s in scales:
+            img = base if s == 1.0 else base.resize((round(base.width * s), round(base.height * s)), Image.NEAREST)
+            r._chat_left = None
+            got = " ".join(f"{i.kind}/{i.side}" for i in r.scan_image(img).items)
+            assert got == EXPECTED[name], f"{name} x{s}"

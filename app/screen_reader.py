@@ -295,7 +295,7 @@ def estimate_scale(img) -> tuple[float, float | None]:
 
 
 def analyze_window(img, ocr_result, cfg: dict, last_chat_left: float | None = None,
-                   chat_left: float | None = None) -> ScanResult:
+                   chat_left: float | None = None, title_h: int | None = None) -> ScanResult:
     """위챗 창 전체 사진 + 글자 인식 결과 → 거래처 이름과 말풍선.
     chat_left 를 주면(대화 영역만 글자 인식한 경우) 대화방 목록 날짜로 찾는 단계를 건너뜀."""
     w, h = img.width, img.height
@@ -304,7 +304,7 @@ def analyze_window(img, ocr_result, cfg: dict, last_chat_left: float | None = No
                  or last_chat_left or w * cfg["chat_left_ratio"])
     chat_right = detect_chat_right_by_color(img, chat_left) or w
     lines = [l for l in lines if l.x1 <= chat_right + 4]
-    title_h = cfg.get("title_height") or detect_header_bottom(img, chat_left) or int(h * 0.09)
+    title_h = title_h or cfg.get("title_height") or detect_header_bottom(img, chat_left) or int(h * 0.09)
     input_top = detect_input_top(img, chat_left)
     input_h = cfg.get("input_height") or (h - input_top + 4 if input_top else int(h * 0.24))
     rgb = img.convert("RGB")
@@ -374,17 +374,26 @@ class ScreenReader:
         else:
             result, _ = self._get_ocr()(np.array(img), use_cls=False)
         t1 = time.perf_counter()
-        res = analyze_window(img, result, self.cfg, self._chat_left, chat_left=cl)
+        # 얇은 구분선(제목 아래 선, 입력칸 윗선)은 줄인 화면에서 흐려지므로 원래 화면에서 찾음
+        head_full = bottom_full = None
+        if scale != 1.0 and cl is not None:
+            clf = cl * scale
+            head_full = detect_header_bottom(full, clf)
+            crf = detect_chat_right_by_color(full, clf) or full.width
+            bottom_full = detect_input_box_top(full, clf, crf)
+        res = analyze_window(img, result, self.cfg, self._chat_left, chat_left=cl,
+                             title_h=round(head_full / scale) if head_full else None)
         self._chat_left = res.chat_left
         # 거울 화면: 대화 영역의 모든 덩어리(말풍선·사진·파일·시간 줄 …)를 위챗과 같은 높이로
         from .chat_parser import to_lines
         from .segment import segment_chat
         chat_right = detect_chat_right_by_color(img, res.chat_left) or img.width
-        bottom = detect_input_box_top(img, res.chat_left, chat_right) or int(img.height * 0.76)
+        bottom = (round(bottom_full / scale) if bottom_full else
+                  detect_input_box_top(img, res.chat_left, chat_right) or int(img.height * 0.76))
         bg = background_color(img, res.chat_left, res.title_h) or (250, 250, 250)
         res.chat_bg = tuple(bg[:3])
         items = segment_chat(img, to_lines(result, self.cfg["ocr_min_score"], 10),
-                             res.chat_left, chat_right, res.title_h, bottom, bg)
+                             res.chat_left, chat_right, res.title_h, bottom, bg, ocr_fn=self._ocr_piece)
         # 중국어 인식으로 읽은 제목은 중국어가 대부분일 때만 이름으로 씀 ('나무 옷걸이 lyt' → 'l lyt' 방지)
         v = res.vendor.replace(" ", "")
         cjk = sum(1 for ch in v if "\u4e00" <= ch <= "\u9fff")
@@ -408,6 +417,15 @@ class ScreenReader:
         res.timing = {"scale": round(scale, 2), "read": round(t1 - t0, 2),
                       "total": round(time.perf_counter() - t0, 2)}
         return res
+
+    def _ocr_piece(self, piece) -> str:
+        """말풍선 한 칸만 두 배로 키워 다시 글자 인식 (짧은 글이 가끔 빠지는 것 보완)."""
+        import numpy as np
+        from PIL import Image, ImageOps
+        big = ImageOps.expand(piece.resize((piece.width * 2, piece.height * 2), Image.BICUBIC), 20,
+                              fill=piece.getpixel((2, piece.height // 2)))
+        result, _ = self._get_ocr()(np.array(big), use_cls=False)
+        return "".join(t for _, t, sc in (result or []) if float(sc) >= self.cfg["ocr_min_score"])
 
     def _title_text(self, img, res) -> str:
         """대화방 이름 읽기 (대화방이 바뀌었을 때만 윈도우 글자 인식을 실행하고, 결과는 기억)."""

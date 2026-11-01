@@ -671,7 +671,8 @@ class Panel(QWidget):
         # 화면에 보이는데 아직 번역 안 된 글은 바로 번역 (글마다 한 번)
         todo = [v["entry"] for v in views if v.get("pending") and v.get("entry")
                 and not v["entry"].get("pending") and not v["entry"].get("ko")]
-        for e in todo[:8]:
+        # 화면에 보이는 글은 한꺼번에 동시에 번역 (하나씩 차례로 하면 늦어짐). 맨 아래(최신) 글부터.
+        for e in list(reversed(todo))[:20]:
             self._translate_entry(e)
 
     def _notice(self, msg: str, color: str):
@@ -841,7 +842,10 @@ class Panel(QWidget):
 
         def work():
             try:
-                self.q.put(("done", direction, vendor, entry_id, text, self.translator.run(req)))
+                t0 = time.perf_counter()
+                data = self.translator.run(req)
+                self._write_log(f"번역 {direction} {time.perf_counter() - t0:.1f}초 ({len(text)}자)")
+                self.q.put(("done", direction, vendor, entry_id, text, data))
             except TranslateError as e:
                 self.q.put(("error", str(e), vendor, entry_id))
             except Exception as e:

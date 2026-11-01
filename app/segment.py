@@ -82,15 +82,19 @@ def _is_orange(c) -> bool:
 
 def _is_light(c, bg) -> bool:
     r, g, b = c[:3]
-    return min(r, g, b) >= 225 and max(r, g, b) - min(r, g, b) <= 10 and tuple(c[:3]) != tuple(bg[:3])
+    near_bg = all(abs(c[i] - bg[i]) <= 6 for i in range(3))
+    return min(r, g, b) >= 225 and max(r, g, b) - min(r, g, b) <= 10 and not near_bg
+
+
+CLOCK_RE = re.compile(r"\d{1,2}:\d{2}")
 
 
 def segment_chat(img, lines: list[Line], chat_left: float, chat_right: float, top: int, bottom: int,
-                 bg) -> list[Item]:
+                 bg, ocr_fn=None) -> list[Item]:
     """대화 영역(위챗 창 기준 x: chat_left~chat_right, y: top~bottom)을 덩어리로 나눔.
     lines 는 위챗 창 기준 좌표의 글자 인식 결과."""
     arr = np.asarray(img.convert("RGB"), dtype=np.int16)
-    x0, x1 = int(chat_left) + 4, int(chat_right) - 16   # 오른쪽 끝 스크롤바는 제외
+    x0, x1 = int(chat_left) + 4, int(chat_right) - 22   # 오른쪽 끝 스크롤바는 제외
     top, bottom = int(top) + 2, int(bottom) - 2
     if x1 - x0 < 50 or bottom - top < 20:
         return []
@@ -98,7 +102,10 @@ def segment_chat(img, lines: list[Line], chat_left: float, chat_right: float, to
     bgv = np.array(bg[:3], dtype=np.int16)
     mask = np.abs(region - bgv).max(axis=2) > 6           # 배경이 아닌 곳
     # 위아래로 길게 이어진 세로줄(스크롤바·창 가장자리·그림자)은 내용이 아니므로 제외
-    mask[:, mask.mean(axis=0) > 0.85] = False
+    # (사진이 위아래로 꽉 찬 경우도 있으므로 폭이 좁은 줄만 뺌)
+    for c0, c1 in _runs(mask.mean(axis=0) > 0.85, min_gap=0):
+        if c1 - c0 <= 14:
+            mask[:, c0:c1] = False
     width = x1 - x0
     rows = mask[:, ::2].any(axis=1)
     items: list[Item] = []
@@ -112,6 +119,7 @@ def segment_chat(img, lines: list[Line], chat_left: float, chat_right: float, to
         # 프로필 사진(정사각형, 창 가장자리 쪽)은 빼고 내용 부분만
         content = []
         avatar_side = None
+        segs = [sg for sg in segs if sg[1] - sg[0] > 3] or segs   # 1~3픽셀짜리 세로 선 조각은 무시
         for cx0, cx1 in segs:
             w = cx1 - cx0
             sub = block[:, cx0:cx1]
@@ -152,6 +160,13 @@ def segment_chat(img, lines: list[Line], chat_left: float, chat_right: float, to
         mode = tuple(int(v) for v in colors[counts.argmax()])
         share = counts.max() / len(pix)
         bw, bh = ax1 - ax0, ay1 - ay0
+        if not inside and ocr_fn and share >= 0.45 and (_is_light(mode, bg) or _is_green(mode)) \
+                and bh <= 200 and _uniform_border(arr, ax0, ay0, ax1, ay1, mode):
+            # 말풍선 모양인데 글자를 못 읽은 경우: 그 칸만 크게 키워서 다시 읽음
+            text = ocr_fn(img.crop((ax0, ay0, ax1, ay1))).strip()
+            if text:
+                inside = [Line(ax0 + 8, ay0 + 10, ax1 - 8, ay1 - 10, text)]
+        bw, bh = ax1 - ax0, ay1 - ay0
         on_bg = all(abs(mode[i] - bg[i]) <= 6 for i in range(3))   # 말풍선 없이 배경에 바로 쓴 글
         gap_l, gap_r = cx0, width - cx1
         # 좌우: 초록이면 나, 아니면 프로필 사진이 있는 쪽, 그것도 없으면 가까운 쪽
@@ -161,9 +176,12 @@ def segment_chat(img, lines: list[Line], chat_left: float, chat_right: float, to
         it = Item("unknown", side, ay0, ay1, ax0, ax1, text)
         if ay0 <= top + 1 and bh < 24:
             continue  # 맨 위에서 잘려 조금만 보이는 칸은 건너뜀
-        if side == "center" and bh < 60:
+        if on_bg and side != "center" and bh < 40 and text:
+            it.kind = "notice"   # 말풍선 없이 배경에 쓴 작은 글 (위챗 안내 문구 등)
+        elif side == "center" and bh < 60:
             # 가운데 회색 글: 시간 줄 또는 안내 (메시지 취소 등)
-            it.kind = "time" if TIME_RE.search(text) or DURATION_RE.search(text) else "notice"
+            is_time = TIME_RE.search(text) or (CLOCK_RE.search(text) and not re.search(r"[\u4e00-\u9fff]", text))
+            it.kind = "time" if is_time else "notice"
             if it.kind == "notice" and RECALL_RE.search(text):
                 it.extra["recall"] = True
         elif share >= 0.45 and _is_green(mode):

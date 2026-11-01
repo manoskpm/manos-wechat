@@ -22,10 +22,32 @@ class ScanResult:
     chat_left: float = 0
     title_h: int = 0
     title_text: str = ""            # 윈도우 한국어 인식으로 읽은 대화방 이름 (예: 칭펑 핸드메이드)
+    title_png: bytes = b""          # 제목 줄 그림 (윈도우 인식이 실패하면 Claude에게 이름을 물어볼 때 사용)
 
 
 def image_signature(img, size=(48, 48)):
     return list(img.convert("L").resize(size).getdata())
+
+
+SAME_TITLE = 8.0  # 제목 지문 차이가 이 값 이하면 같은 대화방 (글자 픽셀이 약 3% 이내로 다름)
+
+
+def title_signature(title_img) -> list:
+    """대화방 제목 지문: 제목 줄에서 글자(어두운 부분)만 정확히 잘라 흑백으로 만든 120x16 그림.
+    빈 배경이 대부분이라 그냥 비교하면 다른 방도 같아 보이므로, 글자 부분만 비교함."""
+    gray = title_img.convert("L")
+    w, h = gray.size
+    region = gray.crop((min(10, w - 1), 0, min(w, 340), h))
+    dark = region.point(lambda v: 255 if v < 150 else 0)
+    box = dark.getbbox()
+    if not box:
+        return [0] * (120 * 16)
+    text = dark.crop(box).resize((120, 16))
+    return [255 if v >= 128 else 0 for v in text.getdata()]
+
+
+def same_title(a, b) -> bool:
+    return signature_distance(a, b) <= SAME_TITLE
 
 
 def signature_distance(a, b) -> float:
@@ -231,7 +253,7 @@ def analyze_window(img, ocr_result, cfg: dict, last_chat_left: float | None = No
         side_fn=lambda l: bubble_side_by_color(rgb, l, chat_left, bg))
     # 제목 왼쪽 부분만 (창 크기를 바꿔도 같은 대화방이면 같은 모양이 되도록 고정 폭)
     title_img = img.crop((int(chat_left), 0, int(min(chat_right, chat_left + 360)), title_h))
-    return ScanResult(vendor, image_signature(title_img, (96, 12)), bubbles, chat_left, title_h)
+    return ScanResult(vendor, title_signature(title_img), bubbles, chat_left, title_h)
 
 
 class ScreenReader:
@@ -278,17 +300,22 @@ class ScreenReader:
 
     def _title_text(self, img, res) -> str:
         """대화방 이름 읽기 (대화방이 바뀌었을 때만 윈도우 글자 인식을 실행하고, 결과는 기억)."""
-        for sig, text in self._title_cache:
-            if signature_distance(sig, res.title_sig) <= 5.0:
+        for sig, text, png in self._title_cache:
+            if same_title(sig, res.title_sig):
+                res.title_png = png
                 return text
         from . import korean_ocr
         title = img.crop((int(res.chat_left), 0, int(min(img.width, res.chat_left + 500)), res.title_h))
         text = korean_ocr.clean_title(korean_ocr.read_text(title.resize((title.width * 2, title.height * 2))))
+        import io
+        buf = io.BytesIO()
+        title.save(buf, format="PNG")
+        res.title_png = buf.getvalue()
         if len(text.replace(" ", "")) < 2:
             text = ""
         if not text and korean_ocr.last_error:
             self._log(f"대화방 이름 읽기 실패: {korean_ocr.last_error}")
-        self._title_cache = (self._title_cache + [(res.title_sig, text)])[-100:]
+        self._title_cache = (self._title_cache + [(res.title_sig, text, res.title_png)])[-100:]
         return text
 
     def grab_now(self):

@@ -1,0 +1,906 @@
+"""위챗 옆에 붙는 번역 패널 (Qt 화면).
+
+위챗과 같은 색·모양으로, 위챗 창이 오른쪽으로 넓어진 것처럼 보이게 만듭니다.
+번역·화면 읽기·대화방 기록 같은 동작은 예전 화면과 같습니다.
+"""
+from __future__ import annotations
+
+import html
+import os
+import queue
+import subprocess
+import sys
+import threading
+import time
+import traceback
+import uuid
+
+from PySide6.QtCore import QPoint, QRect, QSize, Qt, QTimer
+from PySide6.QtGui import QAction, QFont, QGuiApplication, QIcon
+from PySide6.QtWidgets import (QApplication, QButtonGroup, QFileDialog, QFrame, QHBoxLayout, QInputDialog,
+                               QLabel, QLayout, QLineEdit, QMenu, QMessageBox, QPlainTextEdit, QPushButton,
+                               QScrollArea, QSizePolicy, QVBoxLayout, QWidget)
+
+from . import config as C
+from . import shortcuts, updater, win_window
+from .chat_parser import is_chinese_text, merge_into_history, similar
+from .prompts import TONES
+from .screen_reader import ScreenReader, same_title
+from .translator import TranslateError, Translator, build_request, read_title
+from .version import VERSION
+
+FRAME = "#dcdce1"     # 위챗 바깥 회색 테두리
+CARD = "#fafafa"      # 위챗 대화 배경
+GREEN = "#07c160"     # 위챗 초록 (버튼)
+BUBBLE_OUT = "#95ec69"  # 위챗 내 말풍선
+TEXT = "#191919"
+SUB = "#7a7a7a"
+LINK = "#576b95"      # 위챗 링크 색
+FONT = "Malgun Gothic" if sys.platform == "win32" else "WenQuanYi Zen Hei"
+
+STYLE = f"""
+QWidget#root {{ background: {FRAME}; }}
+QFrame#card {{ background: {CARD}; border-radius: 10px; }}
+QLabel#vendor {{ font-size: 16px; color: {TEXT}; }}
+QLabel#status {{ font-size: 11px; color: #6b6b70; }}
+QPushButton#flat {{ border: none; background: transparent; color: #4a4a4f; font-size: 13px; padding: 2px 6px; }}
+QPushButton#flat:hover {{ color: {TEXT}; background: rgba(0,0,0,0.06); border-radius: 4px; }}
+QPushButton#update {{ border: none; background: #fa9d3b; color: white; font-size: 12px; font-weight: bold;
+                     border-radius: 11px; padding: 3px 10px; }}
+QPushButton#tone {{ border: 1px solid #e3e3e3; background: white; color: #555; font-size: 12px;
+                   border-radius: 12px; padding: 3px 12px; }}
+QPushButton#tone:checked {{ background: {GREEN}; border-color: {GREEN}; color: white; }}
+QPushButton#chip {{ border: 1px solid #e3e3e3; background: white; color: #444; font-size: 12px;
+                   border-radius: 13px; padding: 3px 10px; }}
+QPushButton#chip:hover {{ border-color: {GREEN}; color: {GREEN}; }}
+QFrame#inbox {{ background: white; border: 1px solid #e5e5e5; border-radius: 8px; }}
+QPlainTextEdit#input {{ border: none; background: white; font-size: 14px; color: {TEXT}; }}
+QPushButton#send {{ border: none; background: {GREEN}; color: white; font-size: 14px; border-radius: 4px;
+                   padding: 6px 18px; }}
+QPushButton#send:hover {{ background: #06ad56; }}
+QScrollArea {{ border: none; background: transparent; }}
+QWidget#log {{ background: {CARD}; }}
+QFrame#line {{ background: #ececec; max-height: 1px; min-height: 1px; border: none; }}
+QFrame#dash {{ border: none; border-top: 1px dashed #e5e5e5; max-height: 1px; min-height: 1px; }}
+"""
+
+
+class FlowLayout(QLayout):
+    """버튼을 한 줄에 놓다가 자리가 없으면 다음 줄로 넘기는 배치."""
+
+    def __init__(self, parent=None, spacing=6):
+        super().__init__(parent)
+        self._items = []
+        self._sp = spacing
+        self.setContentsMargins(0, 0, 0, 0)
+
+    def addItem(self, item):
+        self._items.append(item)
+
+    def count(self):
+        return len(self._items)
+
+    def itemAt(self, i):
+        return self._items[i] if 0 <= i < len(self._items) else None
+
+    def takeAt(self, i):
+        return self._items.pop(i) if 0 <= i < len(self._items) else None
+
+    def hasHeightForWidth(self):
+        return True
+
+    def heightForWidth(self, w):
+        return self._layout(QRect(0, 0, w, 0), True)
+
+    def setGeometry(self, rect):
+        super().setGeometry(rect)
+        self._layout(rect, False)
+
+    def sizeHint(self):
+        return self.minimumSize()
+
+    def minimumSize(self):
+        s = QSize()
+        for it in self._items:
+            s = s.expandedTo(it.minimumSize())
+        return s
+
+    def _layout(self, rect, test):
+        x, y, line_h = rect.x(), rect.y(), 0
+        for it in self._items:
+            hint = it.sizeHint()
+            if x + hint.width() > rect.right() and line_h > 0:
+                x, y, line_h = rect.x(), y + line_h + self._sp, 0
+            if not test:
+                it.setGeometry(QRect(QPoint(x, y), hint))
+            x += hint.width() + self._sp
+            line_h = max(line_h, hint.height())
+        return y + line_h - rect.y()
+
+
+class InputBox(QPlainTextEdit):
+    """Enter = 번역, Shift+Enter = 줄바꿈. 한글 조합은 Qt 가 칸 안에서 자연스럽게 처리."""
+
+    def __init__(self, on_enter):
+        super().__init__()
+        self._on_enter = on_enter
+
+    def keyPressEvent(self, e):
+        if e.key() in (Qt.Key_Return, Qt.Key_Enter) and not (e.modifiers() & Qt.ShiftModifier):
+            self._on_enter()
+            return
+        super().keyPressEvent(e)
+
+
+class Panel(QWidget):
+    def __init__(self, ask_wechat_path: bool = False):
+        super().__init__(None, Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+        self.setObjectName("root")
+        self.setWindowTitle(f"발주 번역기 v{VERSION}")
+        if shortcuts.icon_path():
+            self.setWindowIcon(QIcon(shortcuts.icon_path()))
+        self.setStyleSheet(STYLE)
+        self.setFont(QFont(FONT, 10))
+        self.resize(430, 760)
+
+        self.cfg = C.load_config()
+        self.log_path = C.data_dir() / "log.txt"
+        self.q: queue.Queue = queue.Queue()
+        self.vendor = ""
+        self.history: list[dict] = []
+        self.translator = None
+        self.own_clip = None
+        self.last_clip = QGuiApplication.clipboard().text()
+        self._last_geom = None
+        self._raw_key = ""
+        self._title_asked: set = set()
+        self._renamed: dict = {}
+        self._wechat_seen = False
+        self._gone_since = None
+        self._hidden = False
+        self._update_info = None
+        self._manual_update_check = False
+        self._drag = None
+        self._status = "시작 중..."
+
+        self._build()
+        self.set_vendor("")
+
+        self.reader = ScreenReader(self.cfg, lambda res: self.q.put(("scan", res)), self._own_hwnd,
+                                   log_path=self.log_path)
+        win_window.set_main_validator(self.reader.is_main_window)
+        self.reader.start()
+
+        self._every(100, self._drain_queue)
+        self._every(500, self._dock_tick)
+        self._every(800, self._clipboard_tick)
+        self._every(1000, self._status_tick)
+        self._every(1000, self._lifecycle_tick)
+        QTimer.singleShot(300, self._ensure_api_key)
+        if ask_wechat_path and not self.cfg.get("wechat_path"):
+            QTimer.singleShot(800, self._ask_wechat_path)
+        if updater.can_update():
+            QTimer.singleShot(5000, self._check_update)
+            self._every(6 * 3600 * 1000, self._check_update)
+        threading.Thread(target=shortcuts.fix_shortcut_icons, daemon=True).start()
+
+    # ------------------------------------------------------------ 공통 도구
+    def _every(self, ms, fn):
+        def run():
+            try:
+                fn()
+            except Exception:
+                self._write_log(f"{fn.__name__} 오류\n{traceback.format_exc()}")
+        t = QTimer(self)
+        t.timeout.connect(run)
+        t.start(ms)
+
+    def _write_log(self, msg):
+        try:
+            with open(self.log_path, "a", encoding="utf-8") as fp:
+                fp.write(time.strftime("%Y-%m-%d %H:%M:%S ") + msg + "\n")
+        except OSError:
+            pass
+
+    def _own_hwnd(self):
+        try:
+            return int(self.winId())
+        except RuntimeError:
+            return None
+
+    def _info(self, title, text):
+        QMessageBox.information(self, title, text)
+
+    # ------------------------------------------------------------ 화면 구성
+    def _build(self):
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 6, 6)
+        root.setSpacing(0)
+
+        # 위쪽 회색 줄 (위챗 제목줄과 같은 높이): 상태 · 설정 · 끄기
+        band = QWidget()
+        band.setFixedHeight(40)
+        bl = QHBoxLayout(band)
+        bl.setContentsMargins(12, 0, 6, 0)
+        self.status_lbl = QLabel("")
+        self.status_lbl.setObjectName("status")
+        bl.addWidget(self.status_lbl, 1)
+        gear = QPushButton("⚙ 설정")
+        gear.setObjectName("flat")
+        gear.clicked.connect(self._settings_menu)
+        bl.addWidget(gear)
+        close = QPushButton("✕")
+        close.setObjectName("flat")
+        close.setToolTip("번역기 끄기")
+        close.clicked.connect(self.quit)
+        bl.addWidget(close)
+        self.band = band
+        root.addWidget(band)
+
+        card = QFrame()
+        card.setObjectName("card")
+        cl = QVBoxLayout(card)
+        cl.setContentsMargins(0, 0, 0, 0)
+        cl.setSpacing(0)
+        root.addWidget(card, 1)
+
+        # 거래처 이름 줄
+        hd = QWidget()
+        hd.setFixedHeight(58)
+        hl = QHBoxLayout(hd)
+        hl.setContentsMargins(18, 0, 10, 0)
+        self.vendor_lbl = QLabel("")
+        self.vendor_lbl.setObjectName("vendor")
+        hl.addWidget(self.vendor_lbl, 1)
+        self.update_btn = QPushButton("⬆ 업데이트")
+        self.update_btn.setObjectName("update")
+        self.update_btn.clicked.connect(self._do_update)
+        self.update_btn.hide()
+        hl.addWidget(self.update_btn)
+        rename = QPushButton("✎ 이름")
+        rename.setObjectName("flat")
+        rename.setToolTip("이 대화방 이름 바꾸기")
+        rename.clicked.connect(self._ask_vendor)
+        hl.addWidget(rename)
+        cl.addWidget(hd)
+        line = QFrame()
+        line.setObjectName("line")
+        cl.addWidget(line)
+
+        # 말투
+        tone_row = QWidget()
+        tl = QHBoxLayout(tone_row)
+        tl.setContentsMargins(16, 10, 16, 4)
+        tl.setSpacing(6)
+        self.tone_group = QButtonGroup(self)
+        self.tone_buttons = {}
+        for key, (label, _) in TONES.items():
+            b = QPushButton(label)
+            b.setObjectName("tone")
+            b.setCheckable(True)
+            b.setChecked(key == self.cfg.get("tone", "polite"))
+            b.clicked.connect(lambda _=False, k=key: self._save_tone(k))
+            self.tone_group.addButton(b)
+            self.tone_buttons[key] = b
+            tl.addWidget(b)
+        tl.addStretch(1)
+        cl.addWidget(tone_row)
+
+        # 대화 기록 (위챗 말풍선 모양)
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.log_w = QWidget()
+        self.log_w.setObjectName("log")
+        self.log_l = QVBoxLayout(self.log_w)
+        self.log_l.setContentsMargins(16, 8, 16, 8)
+        self.log_l.setSpacing(10)
+        self.log_l.addStretch(1)
+        self.scroll.setWidget(self.log_w)
+        cl.addWidget(self.scroll, 1)
+
+        # 자주 쓰는 문장
+        chips = QWidget()
+        fl = FlowLayout(chips)
+        for phrase in self.cfg.get("quick_phrases", []):
+            b = QPushButton(phrase)
+            b.setObjectName("chip")
+            b.clicked.connect(lambda _=False, p=phrase: self._insert_phrase(p))
+            fl.addWidget(b)
+        chips_wrap = QWidget()
+        cw = QVBoxLayout(chips_wrap)
+        cw.setContentsMargins(12, 6, 12, 6)
+        cw.addWidget(chips)
+        cl.addWidget(chips_wrap)
+
+        # 입력칸 + 번역 결과 (위챗 입력창 모양 하나로)
+        box = QFrame()
+        box.setObjectName("inbox")
+        bxl = QVBoxLayout(box)
+        bxl.setContentsMargins(12, 8, 12, 10)
+        bxl.setSpacing(6)
+        self.input = InputBox(self._send)
+        self.input.setObjectName("input")
+        self.input.setPlaceholderText("한국어로 쓰고 Enter (줄바꿈: Shift+Enter)")
+        self.input.setFixedHeight(64)
+        bxl.addWidget(self.input)
+        dash = QFrame()
+        dash.setObjectName("dash")
+        bxl.addWidget(dash)
+        self.res_zh = QLabel("")
+        self.res_zh.setWordWrap(True)
+        self.res_zh.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.res_zh.setStyleSheet(f"font-size: 14px; font-weight: bold; color: {TEXT};")
+        bxl.addWidget(self.res_zh)
+        self.res_back = QLabel("")
+        self.res_back.setWordWrap(True)
+        self.res_back.setStyleSheet(f"font-size: 12px; color: {SUB};")
+        bxl.addWidget(self.res_back)
+        bar = QHBoxLayout()
+        self.copy_lbl = QLabel("번역된 중국어가 여기에 나옵니다")
+        self.copy_lbl.setStyleSheet(f"font-size: 12px; color: {GREEN};")
+        bar.addWidget(self.copy_lbl, 1)
+        recopy = QPushButton("다시 복사")
+        recopy.setObjectName("flat")
+        recopy.clicked.connect(self._recopy)
+        bar.addWidget(recopy)
+        send = QPushButton("번역")
+        send.setObjectName("send")
+        send.clicked.connect(self._send)
+        bar.addWidget(send)
+        bxl.addLayout(bar)
+        box_wrap = QWidget()
+        bw = QVBoxLayout(box_wrap)
+        bw.setContentsMargins(10, 0, 10, 10)
+        bw.addWidget(box)
+        cl.addWidget(box_wrap)
+
+    # 회색 줄을 끌어서 이동 (옆에 붙기를 끈 경우)
+    def mousePressEvent(self, e):
+        if e.button() == Qt.LeftButton and e.position().y() <= self.band.height():
+            self._drag = e.globalPosition().toPoint() - self.frameGeometry().topLeft()
+
+    def mouseMoveEvent(self, e):
+        if self._drag is not None and not self.cfg.get("dock", True):
+            self.move(e.globalPosition().toPoint() - self._drag)
+
+    def mouseReleaseEvent(self, e):
+        self._drag = None
+
+    # ------------------------------------------------------------ 설정
+    def _ensure_api_key(self):
+        if not self.cfg.get("api_key"):
+            self._ask_api_key(first=True)
+        if self.cfg.get("api_key"):
+            self.translator = Translator(self.cfg["api_key"])
+
+    def _ask_api_key(self, first=False):
+        msg = ("Claude API 키를 붙여넣어 주세요.\n(sk-ant- 로 시작합니다. 이 컴퓨터에만 저장됩니다)"
+               if first else "새 Claude API 키를 붙여넣어 주세요.")
+        key, ok = QInputDialog.getText(self, "API 키", msg, QLineEdit.Password)
+        if ok and key.strip():
+            self.cfg["api_key"] = key.strip()
+            C.save_config(self.cfg)
+            self.translator = Translator(self.cfg["api_key"])
+
+    def _settings_menu(self):
+        m = QMenu(self)
+        m.addAction(f"업데이트 확인 (지금 v{VERSION})", self._manual_update)
+        m.addSeparator()
+        auto = QAction("자동 읽기", m, checkable=True, checked=self.cfg.get("auto_read", True))
+        auto.toggled.connect(lambda v: self._save_toggle("auto_read", v))
+        m.addAction(auto)
+        dock = QAction("위챗 옆에 붙기", m, checkable=True, checked=self.cfg.get("dock", True))
+        dock.toggled.connect(lambda v: self._save_toggle("dock", v))
+        m.addAction(dock)
+        m.addSeparator()
+        m.addAction("내 지시문·용어 편집", lambda: self._open(C.instructions_path()))
+        m.addAction("API 키 변경", self._ask_api_key)
+        m.addAction("화면 인식 확인용 사진 저장", self._save_debug)
+        m.addAction("데이터 폴더 열기", lambda: self._open(C.data_dir()))
+        m.addSeparator()
+        m.addAction("번역기 끄기", self.quit)
+        m.exec(self.mapToGlobal(QPoint(self.width() - 200, 36)))
+
+    def _open(self, path):
+        if sys.platform == "win32":
+            os.startfile(str(path))  # noqa: S606 - 사용자가 직접 누른 메뉴
+        else:
+            subprocess.Popen(["xdg-open", str(path)])
+
+    def _save_debug(self):
+        p = C.data_dir() / "screen_check.png"
+        if self.reader.save_debug_image(p):
+            self._info("저장됨", f"저장했습니다:\n{p}\n\n이 사진을 비서실장에게 보내 주시면 화면 인식을 맞춰 드립니다.")
+            self._open(C.data_dir())
+        else:
+            self._info("아직 없음", "위챗 창을 찾지 못했습니다. 위챗을 켜 두고 다시 눌러 주세요.")
+
+    def _save_tone(self, key):
+        self.cfg["tone"] = key
+        C.save_config(self.cfg)
+
+    def _save_toggle(self, key, value):
+        self.cfg[key] = bool(value)
+        if key == "auto_read":
+            self.reader.enabled = bool(value)
+        C.save_config(self.cfg)
+
+    def _ask_vendor(self):
+        name, ok = QInputDialog.getText(self, "거래처 이름", "이 대화방을 패널에 어떤 이름으로 표시할까요?\n"
+                                        "(바꾼 이름은 기억해 두었다가 다음에도 자동으로 씁니다)",
+                                        QLineEdit.Normal, self.vendor)
+        if not ok or not name.strip() or name.strip() == self.vendor:
+            return
+        name = name.strip()
+        old = self.vendor
+        if self._raw_key:
+            self.cfg.setdefault("aliases", {})[self._raw_key] = name
+            C.save_config(self.cfg)
+        C.rename_history(old or "_미지정", name)
+        self.set_vendor(name)
+
+    def _ask_wechat_path(self):
+        from . import wechat_launcher
+        if wechat_launcher.find_wechat_exe(self.cfg.get("wechat_path")):
+            return
+        self._info("위챗 위치", "위챗 프로그램 위치를 찾지 못했습니다.\n다음 창에서 위챗 실행 파일(Weixin.exe 또는 "
+                   "WeChat.exe)을 한 번만 골라 주세요. 다음부터는 자동으로 켭니다.")
+        path, _ = QFileDialog.getOpenFileName(self, "위챗 실행 파일 고르기", "", "위챗 (*.exe)")
+        if path:
+            self.cfg["wechat_path"] = path
+            C.save_config(self.cfg)
+            wechat_launcher.launch(path)
+
+    # ------------------------------------------------------------ 거래처 / 기록
+    def set_vendor(self, vendor: str):
+        self.vendor = vendor
+        self.vendor_lbl.setText(vendor or "위챗 대화방을 클릭하세요")
+        # 대화방을 아직 못 읽었을 때는 예전 '미지정' 기록을 보여주지 않음
+        self.history = C.load_history(vendor) if vendor else []
+        for h in self.history:
+            h.setdefault("id", uuid.uuid4().hex)
+        self._render_all()
+
+    def _save(self):
+        C.save_history(self.vendor or "_미지정", self.history)
+
+    def _render_all(self):
+        lay = self.log_l
+        while lay.count() > 1:  # 맨 위 빈 공간(stretch)만 남기고 지움
+            it = lay.takeAt(1)
+            if it.widget():
+                it.widget().deleteLater()
+        for h in self.history[-80:]:
+            lay.addWidget(self._bubble_row(h))
+        QTimer.singleShot(30, lambda: self.scroll.verticalScrollBar().setValue(
+            self.scroll.verticalScrollBar().maximum()))
+
+    def _bubble_row(self, h: dict) -> QWidget:
+        """메시지 하나 = 위챗 말풍선 (업체: 흰색 왼쪽, 나: 초록 오른쪽)."""
+        e = html.escape
+        out = h["side"] == "out"
+        parts = []
+        if out and h.get("src") == "panel":
+            parts.append(f'<div style="font-size:14px;color:{TEXT}">{e(h.get("ko", ""))}</div>')
+            parts.append(f'<div style="font-size:12px;color:#3d6b2a;margin-top:3px">{e(h["zh"])}</div>')
+        elif h.get("ko"):
+            parts.append(f'<div style="font-size:14px;color:{TEXT}">{e(h["ko"])}</div>')
+            parts.append(f'<div style="font-size:12px;color:{SUB if not out else "#3d6b2a"};margin-top:3px">'
+                         f'{e(h["zh"])}</div>')
+        else:
+            parts.append(f'<div style="font-size:14px;color:{TEXT}">{e(h["zh"])}</div>')
+            if h.get("pending"):
+                parts.append(f'<div style="font-size:12px;color:{SUB};margin-top:3px">번역 중...</div>')
+            else:
+                parts.append(f'<div style="margin-top:3px"><a href="tr:{h["id"]}" style="font-size:12px;'
+                             f'color:{LINK};text-decoration:none">🌐 눌러서 번역</a></div>')
+        if not out and h.get("nuance"):
+            mark = "💡 " if h.get("certainty") == "high" else "💡(추정) "
+            parts.append(f'<div style="margin-top:6px;background:#fff8e5;color:#b26a00;font-size:12px">'
+                         f'{mark}{e(h["nuance"])}</div>')
+        lbl = QLabel("".join(parts))
+        lbl.setTextFormat(Qt.RichText)
+        lbl.setWordWrap(True)
+        lbl.setTextInteractionFlags(Qt.TextSelectableByMouse | Qt.LinksAccessibleByMouse)
+        lbl.linkActivated.connect(lambda link: self._translate_entry_by_id(link.split(":", 1)[1]))
+        lbl.setStyleSheet(f"background:{BUBBLE_OUT if out else 'white'}; border-radius:6px; padding:9px 12px;")
+        lbl.setMaximumWidth(int(max(200, self.width() * 0.78)))
+        lbl.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Preferred)
+        row = QWidget()
+        rl = QHBoxLayout(row)
+        rl.setContentsMargins(0, 0, 0, 0)
+        if out:
+            rl.addStretch(1)
+        rl.addWidget(lbl)
+        if not out:
+            rl.addStretch(1)
+        return row
+
+    def _notice(self, msg: str, color: str):
+        lbl = QLabel(msg)
+        lbl.setWordWrap(True)
+        lbl.setStyleSheet(f"color:{color}; font-size:12px; padding:2px 4px;")
+        self.log_l.addWidget(lbl)
+        QTimer.singleShot(30, lambda: self.scroll.verticalScrollBar().setValue(
+            self.scroll.verticalScrollBar().maximum()))
+
+    def _hint(self, msg: str):
+        self._notice("ℹ " + msg, "#7c3aed")
+
+    def _log_error(self, msg: str):
+        self._notice("⚠ " + msg, "#dc2626")
+
+    # ------------------------------------------------------------ 받은 메시지
+    def _resolve_vendor(self, res) -> str:
+        """대화방 이름 정하기: 글자로 읽은 이름 → 제목 지문으로 기억한 이름 → 새 대화방 (Claude 에게 이름을 물어봄)."""
+        cfg = self.cfg
+        changed = False
+        registry = cfg.setdefault("title_map", [])
+        best = next((e for e in registry if same_title(e["sig"], res.title_sig)), None)
+        raw = res.title_text or res.vendor
+        if raw:
+            known = cfg.setdefault("known_vendors", [])
+            canon = next((k for k in known if similar(k, raw, 0.85)), None)
+            if canon is None:
+                canon = raw
+                known.append(raw)
+                changed = True
+            if best is not None and best["name"] != canon:
+                C.rename_history(cfg.get("aliases", {}).get(best["name"], best["name"]), canon)
+                best["name"] = canon
+                changed = True
+            elif best is None:
+                registry.append({"sig": res.title_sig, "name": canon})
+                changed = True
+        elif best is not None:
+            canon = best["name"]
+        else:
+            canon = f"대화방 {len(registry) + 1}"
+            best = {"sig": res.title_sig, "name": canon}
+            registry.append(best)
+            changed = True
+        if changed:
+            cfg["title_map"] = registry[-300:]
+            C.save_config(cfg)
+        # 글자로 못 읽은 대화방: 제목 줄 그림을 Claude 에게 한 번 보여주고 이름을 받음
+        if not raw and canon.startswith("대화방 ") and res.title_png and canon not in self._title_asked:
+            self._title_asked.add(canon)
+            self._ask_title_name(canon, res.title_png)
+        self._raw_key = canon
+        return cfg.get("aliases", {}).get(canon, canon)
+
+    def _ask_title_name(self, temp_name: str, png: bytes):
+        if not self.translator:
+            return
+
+        def work():
+            try:
+                name = read_title(self.translator, self.cfg, png)
+            except Exception as e:
+                self._write_log(f"Claude 이름 읽기 실패: {e}")
+                return
+            if name:
+                self.q.put(("title_name", temp_name, name))
+        threading.Thread(target=work, daemon=True).start()
+
+    def _apply_title_name(self, temp_name: str, name: str):
+        """임시 이름(대화방 N)을 Claude 가 읽은 진짜 이름으로 바꾸고 기록도 옮김."""
+        changed = False
+        for e in self.cfg.get("title_map", []):
+            if e["name"] == temp_name:
+                e["name"] = name
+                changed = True
+        if not changed:
+            return
+        known = self.cfg.setdefault("known_vendors", [])
+        if name not in known:
+            known.append(name)
+        C.save_config(self.cfg)
+        C.rename_history(temp_name, name)
+        self._renamed[temp_name] = name
+        self._write_log(f"대화방 이름을 Claude 로 읽음: {temp_name} → {name}")
+        if self.vendor == temp_name:
+            self._raw_key = name
+            self.set_vendor(self.cfg.get("aliases", {}).get(name, name))
+
+    def _handle_scan(self, res):
+        vendor = self._resolve_vendor(res)
+        if vendor != self.vendor:
+            self.set_vendor(vendor)
+        hist, auto = merge_into_history(self.history, res.bubbles, max_auto=3)
+        if len(hist) != len(self.history):
+            now = time.strftime("%Y-%m-%d %H:%M")
+            for h in hist:
+                h.setdefault("id", uuid.uuid4().hex)
+                h.setdefault("t", now)
+            self.history = hist
+            self._save()
+            self._render_all()
+        for e in auto:  # 새로 온 업체 메시지만 자동 번역 (옛날 메시지는 눌러야 번역)
+            self._translate_entry(e)
+
+    def _translate_entry_by_id(self, entry_id):
+        entry = next((h for h in self.history if h.get("id") == entry_id), None)
+        if entry and not entry.get("pending"):
+            self._translate_entry(entry)
+
+    def _translate_entry(self, entry):
+        if not self.translator:
+            self._log_error("API 키가 없습니다. ⚙ 설정에서 API 키를 넣어 주세요.")
+            return
+        entry["pending"] = True
+        self._render_all()
+        self._translate_async("in", entry["zh"], entry_id=entry["id"])
+
+    def _translate_async(self, direction, text, tone="polite", entry_id=None):
+        if not self.translator:
+            self._log_error("API 키가 없습니다. ⚙ 설정에서 API 키를 넣어 주세요.")
+            return
+        vendor = self.vendor
+        history = [h for h in self.history if h.get("ko") and h.get("id") != entry_id]
+        req = build_request(cfg=self.cfg, user_instructions=C.load_user_instructions(), vendor=vendor,
+                            history=history, direction=direction, text=text, tone=tone)
+
+        def work():
+            try:
+                self.q.put(("done", direction, vendor, entry_id, text, self.translator.run(req)))
+            except TranslateError as e:
+                self.q.put(("error", str(e), vendor, entry_id))
+            except Exception as e:
+                self.q.put(("error", f"알 수 없는 오류: {e}", vendor, entry_id))
+
+        self._status = "번역 중..."
+        threading.Thread(target=work, daemon=True).start()
+
+    def _history_of(self, vendor):
+        vendor = self._renamed.get(vendor, vendor)  # 번역 중에 대화방 이름이 바뀐 경우 (대화방 N → 진짜 이름)
+        return self.history if vendor == self.vendor else C.load_history(vendor or "_미지정")
+
+    def _store(self, vendor, hist):
+        vendor = self._renamed.get(vendor, vendor)
+        if vendor == self.vendor:
+            self.history = hist
+            self._save()
+            self._render_all()
+        else:
+            C.save_history(vendor or "_미지정", hist)
+
+    def _handle_done(self, direction, vendor, entry_id, text, data):
+        hist = self._history_of(vendor)
+        if direction == "in":
+            entry = next((h for h in hist if h.get("id") == entry_id), None)
+            if entry is None:
+                return
+            entry.pop("pending", None)
+            entry.update(ko=data.get("korean", ""), nuance=data.get("nuance", ""),
+                         certainty=data.get("certainty", "none"))
+            if entry["side"] == "out":
+                entry["nuance"] = ""
+        else:
+            entry = {"id": uuid.uuid4().hex, "t": time.strftime("%Y-%m-%d %H:%M"), "side": "out",
+                     "src": "panel", "ko": text, "zh": data.get("chinese", ""),
+                     "back": data.get("back_translation", ""), "note": data.get("note", "")}
+            hist.append(entry)
+            self._show_result(entry)
+        self._store(vendor, hist)
+
+    def _handle_error(self, msg, vendor, entry_id):
+        self._log_error(msg)
+        if self.res_zh.text() == "번역 중...":
+            self.res_zh.setText("")
+        if entry_id:
+            hist = self._history_of(vendor)
+            for h in hist:
+                if h.get("id") == entry_id:
+                    h.pop("pending", None)
+            self._store(vendor, hist)
+
+    # ------------------------------------------------------------ 보내는 메시지
+    def _send(self):
+        text = self.input.toPlainText().strip()
+        if not text:
+            return
+        self.input.clear()
+        self.res_zh.setText("번역 중...")
+        self.res_back.setText("")
+        self.copy_lbl.setText("")
+        tone = next((k for k, b in self.tone_buttons.items() if b.isChecked()), "polite")
+        self._translate_async("out", text, tone=tone)
+
+    def _insert_phrase(self, phrase):
+        self.input.insertPlainText(phrase)
+        self.input.setFocus()
+
+    def _show_result(self, entry):
+        self.res_zh.setText(entry["zh"])
+        back = "↩ " + entry.get("back", "")
+        if entry.get("note"):
+            back += "\n※ " + entry["note"]
+        self.res_back.setText(back)
+        self._copy(entry["zh"])
+
+    def _copy(self, text):
+        QGuiApplication.clipboard().setText(text)
+        self.own_clip = text
+        self.last_clip = text
+        self.copy_lbl.setText("✓ 복사됨 · 위챗 입력창에 Ctrl+V")
+
+    def _recopy(self):
+        t = self.res_zh.text()
+        if t and t != "번역 중...":
+            self._copy(t)
+
+    # ------------------------------------------------------------ 자동 업데이트
+    def _check_update(self, manual: bool = False):
+        def work():
+            try:
+                info = updater.check_latest()
+            except Exception as e:
+                self._write_log(f"업데이트 확인 실패: {e}")
+                if manual:
+                    self.q.put(("update_msg", f"업데이트 확인에 실패했습니다.\n\n{e}"))
+                return
+            if info:
+                self.q.put(("update", info))
+            elif manual:
+                self.q.put(("update_msg", f"지금 쓰시는 v{VERSION}이 최신 버전입니다."))
+        threading.Thread(target=work, daemon=True).start()
+
+    def _manual_update(self):
+        if not updater.can_update():
+            self._info("업데이트 확인", "설치된 실행 파일에서만 업데이트할 수 있습니다.")
+            return
+        self._manual_update_check = True
+        self._check_update(manual=True)
+
+    def _show_update(self, info):
+        self._update_info = info
+        self.update_btn.setText(f"⬆ 업데이트 v{info['version']}")
+        self.update_btn.show()
+
+    def _do_update(self):
+        info = self._update_info
+        if not info:
+            return
+        msg = f"새 버전(v{info['version']})으로 업데이트할까요?\n프로그램이 잠깐 꺼졌다가 자동으로 다시 켜집니다."
+        if info.get("notes"):
+            msg += "\n\n바뀐 점:\n" + info["notes"]
+        if QMessageBox.question(self, "업데이트", msg) != QMessageBox.Yes:
+            return
+        self.update_btn.setText("받는 중...")
+        self.update_btn.setEnabled(False)
+
+        def work():
+            try:
+                path = updater.download(info["url"], progress=lambda p: self.q.put(("update_progress", p)))
+                self.q.put(("update_ready", path))
+            except Exception as e:
+                self.q.put(("update_failed", str(e)))
+        threading.Thread(target=work, daemon=True).start()
+
+    # ------------------------------------------------------------ 반복 작업
+    def _drain_queue(self):
+        try:
+            while True:
+                item = self.q.get_nowait()
+                kind = item[0]
+                if kind == "scan":
+                    self._handle_scan(item[1])
+                elif kind == "done":
+                    self._handle_done(*item[1:])
+                    self._status = ""
+                elif kind == "error":
+                    self._handle_error(*item[1:])
+                    self._status = ""
+                elif kind == "title_name":
+                    self._apply_title_name(item[1], item[2])
+                elif kind == "update":
+                    self._show_update(item[1])
+                    if self._manual_update_check:
+                        self._manual_update_check = False
+                        self._do_update()
+                elif kind == "update_msg":
+                    self._manual_update_check = False
+                    self._info("업데이트 확인", item[1])
+                elif kind == "update_progress":
+                    self.update_btn.setText(f"받는 중 {item[1]}%")
+                elif kind == "update_ready":
+                    self._save()
+                    updater.apply_and_restart(item[1])
+                    self.quit()
+                    return
+                elif kind == "update_failed":
+                    self._log_error(f"업데이트 실패: {item[1]} 잠시 후 다시 시도해 주세요.")
+                    self.update_btn.setText("⬆ 업데이트")
+                    self.update_btn.setEnabled(True)
+        except queue.Empty:
+            pass
+
+    def _dock_tick(self):
+        if not self.cfg.get("dock", True) or self._hidden:
+            return
+        found = win_window.find_wechat()
+        if not found:
+            return
+        _, (l, t, r, b) = found
+        screen = QGuiApplication.primaryScreen()
+        scale = screen.devicePixelRatio() if screen else 1.0
+        w = int(max(self.cfg.get("panel_width", 400), 430) * scale)
+        sw, _ = win_window.screen_size()
+        if r + w <= sw:
+            x = r
+        elif l - w >= 0:
+            x = l - w
+        else:
+            x = 0
+        geom = (x, t, w, b - t)
+        if geom != self._last_geom:
+            own = self._own_hwnd()
+            if sys.platform == "win32" and own:
+                win_window.place_visible(own, *geom)  # 위챗과 위아래 끝·높이를 정확히 맞춤 (화면 픽셀 기준)
+            else:
+                self.setGeometry(int(x / scale), int(t / scale), int(w / scale), int((b - t) / scale))
+            self._last_geom = geom
+            self._write_log(f"dock wechat={(l, t, r, b)} screen={sw} panel={geom}")
+
+    def _clipboard_tick(self):
+        if not self.cfg.get("clipboard_watch", True):
+            return
+        clip = QGuiApplication.clipboard().text()
+        if not clip or clip == self.last_clip:
+            return
+        self.last_clip = clip
+        found = win_window.find_wechat()
+        fg = win_window.foreground_hwnd()
+        from_wechat = sys.platform != "win32" or (found and fg in (found[0], self._own_hwnd()))
+        if from_wechat and clip != self.own_clip and is_chinese_text(clip):
+            clip = clip.strip()
+            entry = next((h for h in reversed(self.history) if similar(h["zh"], clip)), None)
+            if entry is None:
+                entry = {"id": uuid.uuid4().hex, "t": time.strftime("%Y-%m-%d %H:%M"),
+                         "side": "in", "zh": clip, "ko": ""}
+                self.history.append(entry)
+                self._save()
+            if not entry.get("ko") and not entry.get("pending"):
+                self._translate_entry(entry)
+
+    def _status_tick(self):
+        text = self._status if self._status.startswith("번역") else self.reader.status
+        self.status_lbl.setText(text)
+
+    def _lifecycle_tick(self):
+        """위챗 최소화 → 패널 숨김, 위챗 닫힘(트레이 포함) 5초 → 번역기 완전히 종료."""
+        state = win_window.wechat_state()
+        if state == "visible":
+            self._wechat_seen = True
+            self._gone_since = None
+            if self._hidden:
+                self.show()
+                self._hidden = False
+                self._last_geom = None
+        elif state == "minimized":
+            self._gone_since = None
+            if self.cfg.get("dock", True) and not self._hidden:
+                self.hide()
+                self._hidden = True
+        elif self._wechat_seen and sys.platform == "win32":
+            if self._gone_since is None:
+                self._gone_since = time.time()
+            elif time.time() - self._gone_since > 5:
+                self._write_log("위챗이 닫혀서 번역기도 종료")
+                self.quit()
+
+    def quit(self):
+        try:
+            self.reader.stop()
+        finally:
+            QApplication.instance().quit()
+
+
+def run(ask_wechat_path: bool = False):
+    app = QApplication.instance() or QApplication(sys.argv)
+    app.setQuitOnLastWindowClosed(True)
+    p = Panel(ask_wechat_path=ask_wechat_path)
+    p.show()
+    return app.exec()

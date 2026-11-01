@@ -12,7 +12,7 @@ from pathlib import Path
 
 APP_NAME = "ManosWeChatTranslator"
 
-CONFIG_VERSION = 4
+CONFIG_VERSION = 5
 # 화면 인식 관련 값은 버전이 바뀌면 새 기본값으로 다시 맞춤
 LAYOUT_KEYS = ("chat_left_ratio", "title_height", "input_height", "ocr_min_score", "ocr_min_height",
                "title_map")

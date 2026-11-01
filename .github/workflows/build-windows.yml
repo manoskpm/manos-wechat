@@ -24,9 +24,11 @@ jobs:
           pip install -r requirements.txt pytest pyinstaller==6.22.3
 
       - name: Test
+        env:
+          QT_QPA_PLATFORM: offscreen
         run: |
           python -m pytest -q
-          python -c "import app.ui; print('ui import ok')"
+          python -c "import app.ui_qt; print('ui import ok')"
           python tests/windows_ocr_check.py
 
       - name: Set version
@@ -37,7 +39,7 @@ jobs:
         run: >
           pyinstaller --noconfirm --onefile --windowed --name ManosTranslator
           --collect-all rapidocr_onnxruntime --collect-binaries onnxruntime
-          --icon assets/icon.ico --add-data "assets/icon.ico;assets"
+          --icon assets/icon.ico --add-data "assets/icon.ico;assets" --exclude-module tkinter
           run.py
 
       - name: Build installer

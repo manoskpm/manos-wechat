@@ -5,3 +5,4 @@ pillow==12.3.0
 numpy==2.5.3
 truststore==0.10.4
 certifi==2026.10.18
+PySide6-Essentials==6.12.0

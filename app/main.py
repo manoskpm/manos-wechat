@@ -22,9 +22,9 @@ def main():
                 C.save_config(cfg)
     if not win_window.acquire_single_instance():
         return  # 번역기는 이미 켜져 있음 (위챗만 앞으로 가져옴)
-    win_window.enable_dpi_awareness()  # 창을 만들기 전에 해야 좌표가 정확함
-    from app.ui import App
-    App(ask_wechat_path=with_wechat).run()
+    # 화면 배율(125%·150%) 처리는 Qt 가 알아서 함 (화면 픽셀 좌표로 동작)
+    from app.ui_qt import run
+    sys.exit(run(ask_wechat_path=with_wechat))
 
 
 if __name__ == "__main__":

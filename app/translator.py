@@ -1,6 +1,7 @@
 """Claude API로 번역하는 부분."""
 from __future__ import annotations
 
+import base64
 import json
 
 import anthropic
@@ -89,3 +90,31 @@ class Translator:
             return json.loads(text)
         except ValueError as e:
             raise TranslateError("번역 결과를 읽지 못했습니다. 다시 시도해 주세요.") from e
+
+
+TITLE_PROMPT = ("이 그림은 위챗(WeChat) 대화방 맨 위의 제목 줄입니다. 대화방(상대방) 이름만 그대로 적어 주세요. "
+                "설명이나 따옴표 없이 이름만 씁니다. 이름이 보이지 않으면 아무것도 쓰지 마세요.")
+
+
+def build_title_request(cfg: dict, png: bytes) -> dict:
+    """대화방 제목 줄 그림에서 이름을 읽는 요청 (윈도우 글자 인식이 실패할 때만, 대화방마다 한 번)."""
+    return {
+        "model": cfg.get("model", "claude-sonnet-5-5"),
+        "max_tokens": 1000,
+        "messages": [{"role": "user", "content": [
+            {"type": "image", "source": {"type": "base64", "media_type": "image/png",
+                                         "data": base64.b64encode(png).decode("ascii")}},
+            {"type": "text", "text": TITLE_PROMPT},
+        ]}],
+        "output_config": {"effort": "low"},
+        "betas": [FALLBACK_BETA],
+        "fallbacks": "default",
+    }
+
+
+def read_title(translator: "Translator", cfg: dict, png: bytes) -> str:
+    resp = translator.client.beta.messages.create(**build_title_request(cfg, png))
+    if resp.stop_reason == "refusal":
+        return ""
+    text = next((b.text for b in resp.content if b.type == "text"), "").strip().strip('"\'「」')
+    return text if 2 <= len(text.replace(" ", "")) <= 40 and "\n" not in text else ""

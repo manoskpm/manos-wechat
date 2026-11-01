@@ -5,6 +5,9 @@ name: Build Windows exe
 on:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: windows-latest
@@ -26,6 +29,10 @@ jobs:
           python -c "import app.ui; print('ui import ok')"
           python tests/windows_ocr_check.py
 
+      - name: Set version
+        shell: bash
+        run: echo 'VERSION = "${{ github.run_number }}"' > app/version.py
+
       - name: Build exe
         run: >
           pyinstaller --noconfirm --onefile --windowed --name ManosTranslator
@@ -37,3 +44,13 @@ jobs:
           name: ManosTranslator-windows
           path: dist/ManosTranslator.exe
           retention-days: 14
+
+      # 자동 업데이트용: 새 버전(v빌드번호)으로 실행 파일을 올림
+      - name: Publish release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git log -1 --format=%B > notes.txt
+          gh release create "v${{ github.run_number }}" dist/ManosTranslator.exe \
+            --target "${{ github.sha }}" --title "발주 번역기 v${{ github.run_number }}" --notes-file notes.txt

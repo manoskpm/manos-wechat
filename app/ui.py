@@ -13,6 +13,8 @@ import uuid
 from tkinter import messagebox, simpledialog
 
 from . import config as C
+from . import updater
+from .version import VERSION
 from . import win_window
 from .chat_parser import is_chinese_text, merge_into_history, similar
 from .prompts import TONES
@@ -32,7 +34,7 @@ class App:
     def __init__(self):
         self.cfg = C.load_config()
         self.root = tk.Tk()
-        self.root.title("발주 번역기")
+        self.root.title(f"발주 번역기 v{VERSION}")
         self.root.configure(bg=BG)
         self.root.attributes("-topmost", True)
         # 화면 배율(125%, 150%)에 맞춰 패널 폭도 키움
@@ -70,6 +72,9 @@ class App:
         self._every(800, self._clipboard_tick)
         self._every(1000, self._status_tick)
         self.root.after(300, self._ensure_api_key)
+        if updater.can_update():
+            self.root.after(5000, self._check_update)
+            self._every(6 * 3600 * 1000, self._check_update)
 
     # ------------------------------------------------------------ 공통 도구
     def _every(self, ms, fn):
@@ -98,6 +103,42 @@ class App:
         finally:
             self.root.attributes("-topmost", True)
 
+    # ------------------------------------------------------------ 자동 업데이트
+    def _check_update(self):
+        def work():
+            try:
+                info = updater.check_latest()
+            except Exception as e:  # 인터넷이 안 되면 다음에 다시 확인
+                self._write_log(f"업데이트 확인 실패: {e}")
+                return
+            if info:
+                self.q.put(("update", info))
+        threading.Thread(target=work, daemon=True).start()
+
+    def _show_update(self, info):
+        self._update_info = info
+        self.update_btn.config(text=f"⬆ 업데이트 (v{info['version']})")
+        self.update_btn.pack(side="right", padx=4)
+
+    def _do_update(self):
+        info = self._update_info
+        if not info:
+            return
+        msg = f"새 버전(v{info['version']})으로 업데이트할까요?\n프로그램이 잠깐 꺼졌다가 자동으로 다시 켜집니다."
+        if info.get("notes"):
+            msg += "\n\n바뀐 점:\n" + info["notes"]
+        if not self._dialog(messagebox.askyesno, "업데이트", msg):
+            return
+        self.update_btn.config(text="받는 중...", state="disabled")
+
+        def work():
+            try:
+                path = updater.download(info["url"], progress=lambda p: self.q.put(("update_progress", p)))
+                self.q.put(("update_ready", path))
+            except Exception as e:
+                self.q.put(("update_failed", str(e)))
+        threading.Thread(target=work, daemon=True).start()
+
     # ------------------------------------------------------------ 화면 구성
     def _build(self):
         f = (FONT, 10)
@@ -110,6 +151,11 @@ class App:
                   fg="white", activebackground="#57606f").pack(side="right", padx=4)
         tk.Button(top, text="거래처 변경", command=self._ask_vendor, relief="flat", bg="#2f3542",
                   fg="#cbd5e1", activebackground="#57606f", font=(FONT, 9)).pack(side="right")
+        # 새 버전이 있을 때만 보이는 버튼
+        self.update_btn = tk.Button(top, text="⬆ 업데이트", command=self._do_update, relief="flat",
+                                    bg="#f59e0b", fg="white", activebackground="#d97706",
+                                    font=(FONT, 9, "bold"))
+        self._update_info = None
 
         opts = tk.Frame(self.root, bg=BG)
         opts.pack(fill="x", padx=8, pady=(6, 2))
@@ -500,6 +546,18 @@ class App:
                     self.status_var.set("")
                 elif kind == "error":
                     self._handle_error(*item[1:])
+                elif kind == "update":
+                    self._show_update(item[1])
+                elif kind == "update_progress":
+                    self.update_btn.config(text=f"받는 중 {item[1]}%")
+                elif kind == "update_ready":
+                    self._save()
+                    updater.apply_and_restart(item[1])
+                    self.quit()
+                    return
+                elif kind == "update_failed":
+                    self._log_error(f"업데이트 실패: {item[1]} 잠시 후 다시 시도해 주세요.")
+                    self.update_btn.config(text="⬆ 업데이트", state="normal")
                     if self.res_zh.cget("text") == "번역 중...":
                         self.res_zh.config(text="")
                     self.status_var.set("")

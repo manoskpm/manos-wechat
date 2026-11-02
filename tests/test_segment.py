@@ -125,3 +125,13 @@ def test_partial_read_after_scroll_matches_full_read():
     full = r.scan_image(after)
     sig = lambda res: [(i.kind, i.side, i.y0 // 4) for i in res.items]
     assert part.timing["part"] and sig(part) == sig(full)
+
+
+def test_one_char_bubble_is_not_avatar():
+    """'好' 같은 한 글자 말풍선(정사각형)도 프로필 사진으로 착각하지 않음."""
+    img = Image.new("RGB", (500, 300), BG)
+    d = ImageDraw.Draw(img)
+    d.rectangle([20, 100, 64, 144], fill=(200, 30, 30))          # 프로필 사진
+    d.rounded_rectangle([76, 100, 118, 142], 4, fill=(236, 236, 240))   # 好 (거의 정사각형)
+    items = segment_chat(img, [Line(88, 110, 106, 132, "好")], 0, 500, 0, 300, BG)
+    assert [(i.kind, i.side, i.text) for i in items] == [("text", "in", "好")]

@@ -332,6 +332,12 @@ def chat_profile(img, box) -> np.ndarray | None:
     return g[:, :w].reshape(g.shape[0], 8, w // 8).mean(axis=2)
 
 
+def _shift_err(prev, cur, d):
+    h = prev.shape[0]
+    x, y = (prev[:h - d], cur[d:]) if d >= 0 else (prev[-d:], cur[:h + d])
+    return float(np.abs(x - y).mean())
+
+
 def estimate_shift(prev: np.ndarray | None, cur: np.ndarray | None) -> int | None:
     """위챗을 스크롤했을 때 화면이 위아래로 몇 픽셀 움직였는지 (글자 인식 없이, 0.01초 안팎).
     양수 = 내용이 아래로 내려감(위쪽 옛날 대화를 봄). 확실하지 않으면 None."""
@@ -340,30 +346,26 @@ def estimate_shift(prev: np.ndarray | None, cur: np.ndarray | None) -> int | Non
     h = prev.shape[0]
     if not (np.abs(prev - prev.mean(axis=0)).mean() > 2):   # 거의 빈 화면이면 판단 안 함
         return None
-    a, b = prev[::2], cur[::2]
+    # 4줄 간격으로 대충 찾고 → 그 근처를 1줄 단위로 다듬음 (빠르게)
+    a, b = prev[::4], cur[::4]
     n = a.shape[0]
     best, best_err = None, 1e9
     for d in range(-int(n * 0.7), int(n * 0.7) + 1):
-        if d >= 0:
-            x, y = a[:n - d], b[d:]
-        else:
-            x, y = a[-d:], b[:n + d]
+        x, y = (a[:n - d], b[d:]) if d >= 0 else (a[-d:], b[:n + d])
         err = float(np.abs(x - y).mean())
         if err < best_err:
             best, best_err = d, err
-    if best is None or best_err > 2.5:
+    if best is None or best_err > 3.0:
         return None
-    d = best * 2
-    # 2픽셀 단위로 찾은 것을 1픽셀 단위로 다듬음
-    fine = None
-    fine_err = 1e9
-    for dd in (d - 1, d, d + 1):
-        if abs(dd) >= h:
+    fine, fine_err = None, 1e9
+    for dd in range(best * 4 - 4, best * 4 + 5):
+        if abs(dd) >= h * 0.9:
             continue
-        x, y = (prev[:h - dd], cur[dd:]) if dd >= 0 else (prev[-dd:], cur[:h + dd])
-        err = float(np.abs(x - y).mean())
+        err = _shift_err(prev, cur, dd)
         if err < fine_err:
             fine, fine_err = dd, err
+    if fine_err > 2.5:
+        return None
     return fine if fine else None
 
 
@@ -414,6 +416,7 @@ class ScreenReader:
         self._last_profile = None
         self._last_res = None      # 마지막으로 읽은 결과 (스크롤하면 새로 보이는 부분만 읽기 위해)
         self._shift_acc = 0        # 마지막으로 읽은 뒤 스크롤한 거리
+        self._moving_until = 0.0   # 이 시각까지는 스크롤 중으로 봄
         self._scan_cache: list = []   # 최근에 읽은 화면 (같은 화면이면 다시 읽지 않음)
         self.own_hwnd_getter = own_hwnd_getter
         self.log_path = log_path
@@ -642,7 +645,9 @@ class ScreenReader:
             except Exception as e:  # 화면 읽기 오류로 프로그램 전체가 멈추지 않게
                 self.status = f"화면 읽기 오류: {e}"
                 self._log(traceback.format_exc())
-            time.sleep(min(self.cfg.get("poll_seconds", 0.5), 0.25))
+            # 스크롤 중에는 1초에 약 25번 확인해서 번역 칸이 부드럽게 따라가게, 멈추면 다시 느긋하게
+            moving = time.time() < self._moving_until
+            time.sleep(0.04 if moving else min(self.cfg.get("poll_seconds", 0.5), 0.25))
 
     def _tick(self):
         if not self.enabled:
@@ -671,6 +676,10 @@ class ScreenReader:
                 self._ref_profile = prof
                 self._shift_acc += dy
                 self.on_shift(dy)
+                self._moving_until = time.time() + 0.4
+                return   # 아직 움직이는 중 → 멈춘 뒤에 새로 보인 부분을 읽음
+            if time.time() < self._moving_until:
+                return   # 스크롤이 막 멈춘 직후 (화면이 아직 흔들릴 수 있음)
         # 스크롤 중일 수 있으니 0.12초 뒤 한 번 더 찍어서 같은 화면일 때(안정됐을 때) 읽음
         if signature_distance(sig, self._pending_sig) > 3.0:
             self._pending_sig = sig

@@ -123,7 +123,15 @@ def segment_chat(img, lines: list[Line], chat_left: float, chat_right: float, to
         avatar_side = None
         avatar_box = None
         segs = [sg for sg in segs if sg[1] - sg[0] > 3] or segs   # 1~3픽셀짜리 세로 선 조각은 무시
+        # 프로필 사진은 창 가장자리에 가장 가까운 칸 하나뿐 ('好' 같은 한 글자 말풍선도 정사각형이라 헷갈림)
+        if len(segs) > 1:
+            outer = {segs[0]} if segs[0][0] <= width - segs[-1][1] else {segs[-1]}
+        else:
+            outer = set()
         for cx0, cx1 in segs:
+            if (cx0, cx1) not in outer:
+                content.append((cx0, cx1))
+                continue
             w = cx1 - cx0
             sub = block[:, cx0:cx1]
             sh = int(sub.any(axis=1).sum())

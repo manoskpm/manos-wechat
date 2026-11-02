@@ -247,6 +247,21 @@ class MirrorView(QWidget):
             self._widgets.append(lab)
         self._flash.raise_()
 
+    def move_by(self, d: float):
+        """스크롤만큼 번역 칸들을 그대로 옮김 (다시 만들지 않아서 빠르고 부드러움)."""
+        self._frac = getattr(self, "_frac", 0.0) + d
+        step = int(round(self._frac))
+        self._frac -= step
+        if not step:
+            return
+        for w in self._widgets:
+            w.move(w.x(), w.y() + step)
+        views = self._last[0]
+        for v in views:
+            v["y"] += step
+            if v.get("avatar"):
+                v["avatar"] = dict(v["avatar"], y=v["avatar"]["y"] + step)
+
     def _add_avatar(self, av: dict, side: str, width: int):
         from PySide6.QtGui import QPixmap
         size = max(16, int(round(av["size"])))
@@ -284,12 +299,19 @@ class MirrorView(QWidget):
         if kind in ("time", "notice"):
             lab = QLabel(self)
             lab.setText(text)
-            lab.setFont(self._font(max(10, base - 4)))
+            size = max(10, base - 4)
+            maxw = self.width() - 40
+            # 긴 안내 문구는 위챗처럼 줄바꿈하고, 위챗 높이에 맞게 글자 크기를 줄임
+            for size in range(size, 8, -1):
+                r = QFontMetrics(self._font(size)).boundingRect(QRect(0, 0, maxw, 10000), Qt.TextWordWrap, text)
+                if r.height() <= max(h, 20):
+                    break
+            lab.setFont(self._font(size))
+            lab.setWordWrap(True)
             lab.setStyleSheet("color: #a3a3a3; background: transparent;")
-            lab.adjustSize()
             # 시간 줄은 위챗에서 높이가 낮아 글자가 잘릴 수 있음 → 최소 20 픽셀, 위챗 줄 가운데에 맞춤
             hh = max(h, 20)
-            lab.setFixedSize(min(self.width() - 20, lab.width() + 8), hh)
+            lab.setFixedSize(min(maxw, r.width() + 8), hh)
             lab.setAlignment(Qt.AlignCenter)
             lab.setProperty("dy", -(hh - h) // 2)
             return lab
@@ -415,7 +437,7 @@ class Panel(QWidget):
         win_window.set_main_validator(self.reader.is_main_window)
         self.reader.start()
 
-        self._every(100, self._drain_queue)
+        self._every(30, self._drain_queue)   # 스크롤을 부드럽게 따라가도록 자주 확인
         self._every(500, self._dock_tick)
         self._every(800, self._clipboard_tick)
         self._every(1000, self._status_tick)
@@ -695,6 +717,9 @@ class Panel(QWidget):
         e = self._cache.get(key)
         if e is None:
             e = next((h for h in reversed(self.history[-300:]) if similar(h.get("zh", ""), text)), None)
+        if e is not None and e.get("ko") and normalize(e["ko"]) == normalize(e.get("zh", "")) \
+                and needs_translation(e.get("zh", "")):
+            e["ko"] = ""   # 예전 버전이 영어를 번역 안 하고 그대로 저장한 기록 → 이번에 번역
         if e is None:
             e = {"id": uuid.uuid4().hex, "t": time.strftime("%Y-%m-%d %H:%M"), "side": side, "kind": kind,
                  "zh": text, "ko": ""}
@@ -917,25 +942,14 @@ class Panel(QWidget):
             self._render_mirror()
 
     def _handle_shift(self, dy: int):
-        """위챗을 스크롤한 만큼 번역 칸도 바로 같이 움직임 (새로 보이는 부분은 곧 글자 인식으로 채움)."""
+        """위챗을 스크롤한 만큼 번역 칸을 바로 같이 밀어 줌 (다시 그리지 않고 옮기기만 → 부드러움).
+        새로 보이는 부분은 스크롤이 멈추면 읽어서 채움."""
         res = self._last_res
         if res is None:
             return
-        import copy
-        moved = copy.copy(res)
-        items = []
-        for it in res.items:
-            n = copy.copy(it)
-            n.y0, n.y1 = it.y0 + dy, it.y1 + dy
-            n.extra = dict(it.extra)
-            if "avatar" in n.extra:
-                ax0, ay0, ax1, ay1 = n.extra["avatar"]
-                n.extra["avatar"] = (ax0, ay0 + dy, ax1, ay1 + dy)
-            if n.y1 > res.chat_top and n.y0 < res.chat_bottom:
-                items.append(n)
-        moved.items = items
-        self._last_res = moved
-        self._render_mirror()
+        from .screen_reader import shift_result
+        self._last_res = shift_result(res, dy)
+        self.mirror.move_by(dy / (self.devicePixelRatioF() or 1.0))
 
     def _match_layout(self, res):
         """번역창의 제목 줄·입력칸 높이를 위챗과 같게 → 말풍선 높이가 그대로 맞음."""

@@ -236,12 +236,15 @@ class ComposeWindow(QWidget):
         if first:
             first.set_picked(True)
 
-    def show_reading(self, zh: str, ko: str, nuance: str = ""):
-        """업체 글을 복사(Ctrl+C)했을 때: 원문과 번역을 크게."""
+    def show_reading(self, zh: str, ko: str, nuance: str = "", title: str = "원문",
+                     intent_state: str = "", on_intent=None):
+        """말풍선을 눌렀을 때·업체 글을 복사(Ctrl+C)했을 때: 원문과 번역, 속뜻을 크게."""
         self._close_timer.stop()
         self._clear()
-        self._add(self._label("복사한 업체 글", "mine"))
-        self._add(self._label(zh, "ctitle", wrap=True))
+        self._add(self._label(title, "mine"))
+        zh_lab = self._label(zh, "ctitle", wrap=True)
+        zh_lab.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self._add(zh_lab)
         self._add(self._label("번역", "mine"))
         ko_lab = self._label(ko, "zh", wrap=True)
         ko_lab.setTextInteractionFlags(Qt.TextSelectableByMouse)
@@ -251,8 +254,24 @@ class ComposeWindow(QWidget):
             box.setObjectName("notebox")
             bl = QVBoxLayout(box)
             bl.setContentsMargins(12, 8, 12, 8)
-            bl.addWidget(self._label("💡 " + nuance, "note", wrap=True))
+            lab = self._label("💡 속뜻\n" + nuance, "note", wrap=True)
+            lab.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            bl.addWidget(lab)
             self._add(box)
+        elif intent_state == "wait":
+            self._add(self._label("💡 속뜻 분석 중…", "mine"))
+        elif intent_state == "ask" and on_intent:
+            # 속뜻은 궁금할 때만 (누를 때만 AI 사용)
+            row = QHBoxLayout()
+            btn = QPushButton("🔍 속뜻 자세히 보기")
+            btn.setObjectName("apply")
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.clicked.connect(on_intent)
+            row.addWidget(btn)
+            row.addStretch(1)
+            holder = QWidget()
+            holder.setLayout(row)
+            self._add(holder)
         self.body.addStretch(1)
 
     def show_error(self, msg: str):

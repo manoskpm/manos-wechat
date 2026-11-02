@@ -584,6 +584,13 @@ class ScreenReader:
         res.chat_left = res.chat_left * scale
         res.title_h, res.band_h = S(res.title_h), S(res.band_h)
         res.chat_top, res.chat_bottom, res.win_h = res.title_h, S(bottom), full.height
+        # 화면 위·아래 끝에서 잘린 덩어리 표시는 실제 대화 영역 기준으로 다시 (일부만 읽은 경우 경계 착각 방지)
+        edge = 6 * scale
+        for it in res.items:
+            if it.y0 <= res.chat_top + edge or it.y1 >= res.chat_bottom - edge:
+                it.extra["cut"] = True
+            else:
+                it.extra.pop("cut", None)
         res.chat_right = chat_right * scale
         # 한글 이름은 패널이 따로(기다리지 않고) Claude 로 읽음 → 제목 그림만 넘김
         title = full.crop((int(res.chat_left), res.band_h, int(min(full.width, res.chat_left + 500 * scale)),

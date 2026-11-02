@@ -6,7 +6,7 @@ import json
 
 import anthropic
 
-from .prompts import INCOMING_SCHEMA, OUTGOING_SCHEMA, SYSTEM_PROMPT, TONES
+from .prompts import INCOMING_SCHEMA, INTENT_SCHEMA, OUTGOING_SCHEMA, SYSTEM_PROMPT, TONES
 
 # 안전 분류기가 요청을 거절하면 서버가 알아서 다른 모델로 다시 처리하게 하는 기능
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
@@ -35,10 +35,16 @@ def build_request(*, cfg: dict, user_instructions: str, vendor: str, history: li
     convo = format_history(history, cfg.get("history_for_prompt", 12))
     if direction == "in":
         task = (
-            "작업: incoming. 아래 업체 메시지를 한국어로 옮기고 속뜻을 판단해.\n"
+            "작업: incoming. 아래 업체 메시지를 한국어로 옮겨. (번역만)\n"
             f"<message>\n{text}\n</message>"
         )
         schema = INCOMING_SCHEMA
+    elif direction == "intent":
+        task = (
+            "작업: intent. 대표가 이 메시지의 속뜻을 자세히 알고 싶어 한다. 번역과 속뜻 풀이를 해.\n"
+            f"<message>\n{text}\n</message>"
+        )
+        schema = INTENT_SCHEMA
     else:
         tone_desc = TONES.get(tone, TONES["polite"])[1]
         task = (

@@ -62,6 +62,7 @@ QPushButton#send {{ border: none; background: {GREEN}; color: white; font-size: 
 QPushButton#send:hover {{ background: #06ad56; }}
 QScrollArea {{ border: none; background: transparent; }}
 QWidget#log {{ background: {CARD}; }}
+QToolTip {{ background: white; color: {TEXT}; border: 1px solid #e5e5e5; padding: 6px; font-size: 13px; }}
 QFrame#line {{ background: #ececec; max-height: 1px; min-height: 1px; border: none; }}
 QFrame#dash {{ border: none; border-top: 1px dashed #e5e5e5; max-height: 1px; min-height: 1px; }}
 """
@@ -356,6 +357,10 @@ class MirrorView(QWidget):
         r = fm.boundingRect(QRect(0, 0, inner_w, 10000), Qt.TextWordWrap, shown)
         w = min(maxw, max(r.width() + 2 * pad + Bubble.TAIL + 2, 40))
         lab = Bubble(self, bg, fg, tail, v.get("tail_y") or h / 2, border)
+        if v.get("entry") and self._on_click:   # 누르면 오른쪽 창에 원문·번역·속뜻을 크게
+            e = v["entry"]
+            lab.setCursor(Qt.PointingHandCursor)
+            lab.mousePressEvent = lambda ev, e=e: self._on_click(e)
         lab.setText(shown)
         lab.setWordWrap(True)
         lab.setFont(self._font(size))
@@ -546,7 +551,7 @@ class Panel(QWidget):
         self.header_line = line
 
         # 거울 화면: 위챗 말풍선과 같은 높이에 번역 박스
-        self.mirror = MirrorView(self._translate_entry_by_id)
+        self.mirror = MirrorView(self._show_entry)
         cl.addWidget(self.mirror, 1)
 
         # 아래: 위챗 입력칸과 같은 모양 (입력 · 번역 결과 · 도구 줄)
@@ -737,8 +742,9 @@ class Panel(QWidget):
             else:
                 m = self.memory["in"].get(memory_key(text))   # 다른 대화방에서라도 전에 번역한 글이면 바로
                 if m and m.get("ko"):
-                    e.update(ko=m["ko"], nuance="" if side == "out" else m.get("nuance", ""),
-                             certainty=m.get("certainty", "none"))
+                    e["ko"] = m["ko"]
+                    if m.get("intent"):
+                        e.update(nuance=m.get("nuance", ""), certainty=m.get("certainty", "none"), intent=True)
             self.history.append(e)
             self._dirty = True
         self._cache[key] = e
@@ -767,7 +773,9 @@ class Panel(QWidget):
                 v["avatar"] = {"png": it.extra["avatar_png"], "size": (ax1 - ax0) / dpr, "y": ay0 / dpr - offset,
                                "off": ((ax0 - cl) if it.side != "out" else (cr - ax1)) / dpr}
                 v["tail_y"] = ((ay0 + ay1) / 2 - it.y0) / dpr   # 꼬리는 프로필 사진 가운데 높이
-            if it.kind == "text":
+            if it.kind == "text" and it.extra.get("cut"):
+                v.update(text="⋯", pending=True)   # 화면 끝에서 잘린 글: 다 보이면 번역 (잘린 글을 번역하면 틀림)
+            elif it.kind == "text":
                 e = self._entry_for(it.side, it.text)
                 v.update(text=e.get("ko") or ("번역 중…" if e.get("pending") else ""), entry=e,
                          nuance=e.get("nuance", ""), pending=not e.get("ko"))
@@ -972,6 +980,28 @@ class Panel(QWidget):
             if self.bottom.height() != bh:
                 self.bottom.setFixedHeight(bh)
 
+    def _show_entry(self, entry: dict):
+        """번역창 말풍선을 누름 → 오른쪽 측면창에 원문·번역·속뜻을 크게 (번역 전이면 번역 시작)."""
+        if not entry.get("ko") and not entry.get("pending"):
+            self._translate_entry(entry)
+        self._shown_entry = entry.get("id")
+        self._show_compose()
+        state = "done" if entry.get("intent") else ("wait" if entry.get("intent_pending") else "ask")
+        self.compose.show_reading(entry.get("zh", ""), entry.get("ko") or "번역 중…", entry.get("nuance", ""),
+                                  intent_state=state, on_intent=lambda e=entry: self._request_intent(e))
+
+    def _request_intent(self, entry: dict):
+        """[🔍 속뜻 자세히 보기] → 그때만 AI에게 속뜻 풀이를 요청 (같은 글은 다음부터 저장소에서)."""
+        m = self.memory["in"].get(memory_key(entry.get("zh", "")))
+        if m and m.get("intent"):
+            entry.update(nuance=m.get("nuance", ""), certainty=m.get("certainty", "none"), intent=True)
+            self._dirty = True
+            self._show_entry(entry)
+            return
+        entry["intent_pending"] = True
+        self._show_entry(entry)
+        self._translate_async("intent", entry["zh"], entry_id=entry["id"])
+
     def _translate_entry_by_id(self, entry_id):
         entry = next((h for h in self.history if h.get("id") == entry_id), None)
         if entry and not entry.get("pending"):
@@ -980,18 +1010,20 @@ class Panel(QWidget):
     def _remember_in(self, entry):
         if entry.get("ko") and needs_translation(entry.get("zh", "")):
             self.memory["in"][memory_key(entry["zh"])] = {"ko": entry["ko"], "nuance": entry.get("nuance", ""),
-                                                         "certainty": entry.get("certainty", "none")}
+                                                         "certainty": entry.get("certainty", "none"),
+                                                         "intent": bool(entry.get("intent"))}
             C.save_memory(self.memory)
 
     def _translate_entry(self, entry):
         m = self.memory["in"].get(memory_key(entry.get("zh", "")))
         if m and m.get("ko"):   # 전에 번역한 글 → AI 없이 바로
             entry.pop("pending", None)
-            entry.update(ko=m["ko"], nuance="" if entry.get("side") == "out" else m.get("nuance", ""),
-                         certainty=m.get("certainty", "none"))
+            entry["ko"] = m["ko"]
+            if m.get("intent"):
+                entry.update(nuance=m.get("nuance", ""), certainty=m.get("certainty", "none"), intent=True)
             if entry.get("src") == "clip":
                 self._show_compose()
-                self.compose.show_reading(entry["zh"], entry["ko"], entry.get("nuance", ""))
+                self.compose.show_reading(entry["zh"], entry["ko"], entry.get("nuance", ""), "복사한 업체 글")
             self._dirty = True
             QTimer.singleShot(0, self._render_mirror)
             return
@@ -1039,19 +1071,24 @@ class Panel(QWidget):
 
     def _handle_done(self, direction, vendor, entry_id, text, data):
         hist = self._history_of(vendor)
-        if direction == "in":
+        if direction in ("in", "intent"):
             entry = next((h for h in hist if h.get("id") == entry_id), None)
             if entry is None:
                 return
             entry.pop("pending", None)
-            entry.update(ko=data.get("korean", ""), nuance=data.get("nuance", ""),
-                         certainty=data.get("certainty", "none"))
-            if entry["side"] == "out":
-                entry["nuance"] = ""
+            entry.pop("intent_pending", None)
+            if direction == "intent":   # 대표가 눌러서 요청한 속뜻 풀이
+                entry.update(nuance=data.get("nuance", ""), certainty=data.get("certainty", "none"), intent=True)
+                if not entry.get("ko"):
+                    entry["ko"] = data.get("korean", "")
+            else:
+                entry["ko"] = data.get("korean", "")
             self._remember_in(entry)
+            if self.compose.isVisible() and getattr(self, "_shown_entry", None) == entry_id:
+                self._show_entry(entry)
             if entry.get("src") == "clip":  # 복사해서 번역한 글: 작성 도우미 창에 크게 보여줌
                 self._show_compose()
-                self.compose.show_reading(entry["zh"], entry["ko"], entry.get("nuance", ""))
+                self.compose.show_reading(entry["zh"], entry["ko"], entry.get("nuance", ""), "복사한 업체 글")
                 self.copy_lbl.setText("복사한 글을 번역했습니다")
         else:
             options = [o for o in data.get("options", []) if o.get("chinese")]
@@ -1089,6 +1126,7 @@ class Panel(QWidget):
             for h in hist:
                 if h.get("id") == entry_id:
                     h.pop("pending", None)
+                    h.pop("intent_pending", None)
             self._store(vendor, hist)
 
     # ------------------------------------------------------------ 보내는 메시지

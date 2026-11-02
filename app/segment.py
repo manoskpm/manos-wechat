@@ -234,6 +234,8 @@ def segment_chat(img, lines: list[Line], chat_left: float, chat_right: float, to
             it.kind = "photo"  # 위아래 끝에서 잘린 사진
         if it.side == "center" and it.kind not in ("time", "notice"):
             it.side = avatar_side or ("in" if gap_l < gap_r else "out")
+        if ay0 <= top + 3 or ay1 >= bottom - 3:
+            it.extra["cut"] = True   # 화면 위·아래 끝에서 잘려 일부만 보임
         if it.kind in ("text", "file", "link", "voice"):
             it.extra["bg"] = mode   # 위챗 말풍선 색 그대로 (업체 회색/흰색, 내 초록)
         if inside:

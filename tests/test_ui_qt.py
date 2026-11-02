@@ -31,7 +31,9 @@ def panel(tmp_path, monkeypatch):
                 return {"options": [{"label": "정중하게(추천)", "chinese": "中:" + txt, "back_translation": "역:" + txt},
                                     {"label": "짧게", "chinese": "短:" + txt, "back_translation": "짧:" + txt}],
                         "note": ""}
-            return {"korean": "한:" + txt, "nuance": "", "certainty": "none"}
+            if "작업: intent" in req["messages"][0]["content"]:
+                return {"korean": "한:" + txt, "nuance": "속:" + txt, "certainty": "high"}
+            return {"korean": "한:" + txt}
 
     p.translator = FakeTr()
     yield p
@@ -179,3 +181,37 @@ def test_english_is_translated(panel):
     kos = {h["zh"]: h["ko"] for h in p.history}
     assert kos["How much is the unit price?"] == "한:How much is the unit price?"
     assert kos["2026"] == "2026" and kos["감사합니다"] == "감사합니다"
+
+
+def test_click_bubble_shows_detail(panel):
+    """번역창 말풍선을 누르면 오른쪽 창에 원문·번역이 크게."""
+    p = panel
+    p.resize(400, 1100); p.show()
+    from PySide6.QtWidgets import QApplication, QLabel
+    QApplication.processEvents()
+    _scan(p, "工厂己", [13] * 1920, [("in", "有点难度")])
+    _scan(p, "工厂己", [13] * 1920, [("in", "有点难度")])
+    bubble = next(w for w in p.mirror._widgets if "有点难度" in w.text())
+    bubble.mousePressEvent(None)
+    assert p.compose.isVisible()
+    texts = [w.text() for w in p.compose._widgets if isinstance(w, QLabel)]
+    assert "有点难度" in texts and "한:有点难度" in texts
+
+
+def test_intent_only_when_asked(panel):
+    """속뜻은 평소엔 안 하고, 말풍선을 누른 뒤 [속뜻 자세히 보기]를 누를 때만 AI로 (같은 글은 다음부터 저장소에서)."""
+    p = panel
+    calls = []
+    run = p.translator.run
+    p.translator.run = lambda req: (calls.append(req["messages"][0]["content"]), run(req))[1]
+    _scan(p, "工厂庚", [17] * 1920, [("in", "有点难度")])
+    _scan(p, "工厂庚", [17] * 1920, [("in", "有点难度")])
+    e = p.history[-1]
+    assert e["ko"] == "한:有点难度" and not e.get("nuance") and len(calls) == 1
+    p._show_entry(e)
+    p._request_intent(e)
+    p._drain_queue()
+    assert e["nuance"] == "속:有点难度" and "작업: intent" in calls[-1] and len(calls) == 2
+    _scan(p, "工厂辛", [201] * 1920, [("in", "有点难度")])          # 다른 방에서 같은 글
+    e2 = p.history[-1]
+    assert e2["ko"] == "한:有点难度" and e2.get("nuance") == "속:有点难度" and len(calls) == 2

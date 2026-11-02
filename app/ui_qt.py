@@ -442,6 +442,8 @@ class Panel(QWidget):
         self._every(800, self._clipboard_tick)
         self._every(1000, self._status_tick)
         self._every(1000, self._lifecycle_tick)
+        self._idle_since = None
+        self._every(5000, self._auto_apply_tick)
         QTimer.singleShot(300, self._ensure_api_key)
         if ask_wechat_path and not self.cfg.get("wechat_path"):
             QTimer.singleShot(800, self._ask_wechat_path)
@@ -1249,7 +1251,23 @@ class Panel(QWidget):
         self.update_btn.setText(f"⬆ v{version} 지금 적용")
         self.update_btn.setEnabled(True)
         self.update_btn.show()
-        self._write_log(f"새 버전 v{version} 받아 둠 (위챗을 끄면 적용)")
+        self._write_log(f"새 버전 v{version} 받아 둠 → 쓰는 중이 아닐 때 자동 적용")
+
+    def _auto_apply_tick(self):
+        """받아 둔 새 버전을 알아서 적용: 입력칸이 비어 있고 작성 도우미 창이 닫혀 있고 번역 중이 아닐 때.
+        번역기만 10초쯤 꺼졌다 켜지고 위챗은 그대로."""
+        if not self._pending_update or self._hidden:
+            return
+        busy = (self.input.toPlainText().strip() or self.compose.isVisible()
+                or self._status.startswith("번역") or any(h.get("pending") for h in self.history[-30:]))
+        if busy:
+            self._idle_since = None
+            return
+        if self._idle_since is None:
+            self._idle_since = time.time()
+        elif time.time() - self._idle_since >= 20:   # 20초 동안 아무것도 안 할 때
+            self._write_log("새 버전 자동 적용")
+            self._do_update()
 
     def _do_update(self):
         """업데이트 버튼: 받아 둔 게 있으면 바로 적용(다시 켜짐), 없으면 받은 뒤 바로 적용."""

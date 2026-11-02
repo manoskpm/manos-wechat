@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (QApplication, QFileDialog, QFrame, QHBoxLayout, Q
 
 from . import config as C
 from . import shortcuts, updater, win_window
-from .chat_parser import CJK_RE, is_chinese_text, normalize, similar
+from .chat_parser import CJK_RE, is_chinese_text, memory_key, normalize, similar
 from .segment import DURATION_RE, MONEY_RE, RECALL_RE, ko_time
 from .prompts import TONES
 from .screen_reader import ScreenReader, same_title
@@ -518,15 +518,6 @@ class Panel(QWidget):
         self.input.setObjectName("input")
         self.input.setPlaceholderText("한국어로 쓰고 Enter (줄바꿈: Shift+Enter)")
         bxl.addWidget(self.input, 1)
-        self.res_zh = QLabel("")
-        self.res_zh.setWordWrap(True)
-        self.res_zh.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        self.res_zh.setStyleSheet(f"font-size: 14px; font-weight: bold; color: {TEXT};")
-        bxl.addWidget(self.res_zh)
-        self.res_back = QLabel("")
-        self.res_back.setWordWrap(True)
-        self.res_back.setStyleSheet(f"font-size: 12px; color: {SUB};")
-        bxl.addWidget(self.res_back)
         bar = QHBoxLayout()
         bar.setSpacing(4)
         self.tone_btn = QPushButton()
@@ -559,6 +550,14 @@ class Panel(QWidget):
         self.bottom.setFixedHeight(190)
         cl.addWidget(self.bottom)
         self._update_tone_label()
+        # 보낼 문장 후보를 크게 보여 주는 작성 도우미 창 (번역 누를 때만 뜸)
+        from .compose import ComposeWindow
+        self.compose = ComposeWindow(self._pick_option, on_retry=self._retry_send)
+        self._last_send = ""
+        self._last_tone = "polite"
+        self._last_pick = ""
+        self.memory = C.load_memory()   # 한 번 번역한 글은 기억해서 AI 없이 바로 씀
+        self._out_entry_id = None
 
     # 회색 줄을 끌어서 이동 (옆에 붙기를 끈 경우)
     def mousePressEvent(self, e):
@@ -687,6 +686,11 @@ class Panel(QWidget):
                  "zh": text, "ko": ""}
             if not CJK_RE.search(text):  # 중국어가 없는 글(yes, OK, 숫자, 한국어)은 그대로
                 e["ko"] = text
+            else:
+                m = self.memory["in"].get(memory_key(text))   # 다른 대화방에서라도 전에 번역한 글이면 바로
+                if m and m.get("ko"):
+                    e.update(ko=m["ko"], nuance="" if side == "out" else m.get("nuance", ""),
+                             certainty=m.get("certainty", "none"))
             self.history.append(e)
             self._dirty = True
         self._cache[key] = e
@@ -915,7 +919,24 @@ class Panel(QWidget):
         if entry and not entry.get("pending"):
             self._translate_entry(entry)
 
+    def _remember_in(self, entry):
+        if entry.get("ko") and CJK_RE.search(entry.get("zh", "")):
+            self.memory["in"][memory_key(entry["zh"])] = {"ko": entry["ko"], "nuance": entry.get("nuance", ""),
+                                                         "certainty": entry.get("certainty", "none")}
+            C.save_memory(self.memory)
+
     def _translate_entry(self, entry):
+        m = self.memory["in"].get(memory_key(entry.get("zh", "")))
+        if m and m.get("ko"):   # 전에 번역한 글 → AI 없이 바로
+            entry.pop("pending", None)
+            entry.update(ko=m["ko"], nuance="" if entry.get("side") == "out" else m.get("nuance", ""),
+                         certainty=m.get("certainty", "none"))
+            if entry.get("src") == "clip":
+                self._show_compose()
+                self.compose.show_reading(entry["zh"], entry["ko"], entry.get("nuance", ""))
+            self._dirty = True
+            QTimer.singleShot(0, self._render_mirror)
+            return
         if not self.translator:
             self._log_error("API 키가 없습니다. ⚙ 설정에서 API 키를 넣어 주세요.")
             return
@@ -969,22 +990,41 @@ class Panel(QWidget):
                          certainty=data.get("certainty", "none"))
             if entry["side"] == "out":
                 entry["nuance"] = ""
-            if entry.get("src") == "clip":  # 복사해서 번역한 글: 아래 결과칸에도 보여줌
-                self.res_zh.setText(entry["ko"])
-                self.res_back.setText("↩ " + entry["zh"])
+            self._remember_in(entry)
+            if entry.get("src") == "clip":  # 복사해서 번역한 글: 작성 도우미 창에 크게 보여줌
+                self._show_compose()
+                self.compose.show_reading(entry["zh"], entry["ko"], entry.get("nuance", ""))
                 self.copy_lbl.setText("복사한 글을 번역했습니다")
         else:
+            options = [o for o in data.get("options", []) if o.get("chinese")]
+            if not options and data.get("chinese"):
+                options = [{"label": "추천", "chinese": data["chinese"],
+                            "back_translation": data.get("back_translation", "")}]
+            if not options:
+                self.compose.show_error("번역 결과가 비어 있습니다. 다시 만들기를 눌러 주세요.")
+                return
+            first = options[0]
             entry = {"id": uuid.uuid4().hex, "t": time.strftime("%Y-%m-%d %H:%M"), "side": "out",
-                     "src": "panel", "ko": text, "zh": data.get("chinese", ""),
-                     "back": data.get("back_translation", ""), "note": data.get("note", "")}
+                     "src": "panel", "ko": text, "zh": first["chinese"], "back": first.get("back_translation", ""),
+                     "note": data.get("note", ""), "options": options}
             hist.append(entry)
-            self._show_result(entry)
+            self._out_entry_id = entry["id"]
+            if not data.get("_from_memory"):
+                self.memory["out"][self._last_tone + "|" + text.strip()] = {
+                    "options": options, "note": data.get("note", "")}
+                C.save_memory(self.memory)
+            self._show_compose()
+            self.compose.show_options(text, options, data.get("note", ""))
+            # 추천 문장은 바로 복사해 둠 (다른 후보를 누르면 그걸로 바뀜)
+            self.compose.mark_first()
+            self._last_pick = first["chinese"]
+            self._copy(first["chinese"])
         self._store(vendor, hist)
 
     def _handle_error(self, msg, vendor, entry_id):
         self._log_error(msg)
-        if self.res_zh.text() == "번역 중...":
-            self.res_zh.setText("")
+        if not entry_id and self.compose.isVisible():
+            self.compose.show_error(msg)
         if entry_id:
             hist = self._history_of(vendor)
             for h in hist:
@@ -998,23 +1038,52 @@ class Panel(QWidget):
         if not text:
             return
         self.input.clear()
-        self.res_zh.setText("번역 중...")
-        self.res_back.setText("")
         self.copy_lbl.setText("")
+        self._last_send = text
         tone = self.cfg.get("tone", "polite")
+        self._last_tone = tone
+        self._show_compose()
+        m = self.memory["out"].get(tone + "|" + text)
+        if m and m.get("options"):   # 전에 똑같이 쓴 말 → AI 없이 바로 (다시 만들기를 누르면 새로)
+            self._handle_done("out", self.vendor, None, text, dict(m, _from_memory=True))
+            return
+        self.compose.show_waiting(text)
         self._translate_async("out", text, tone=tone)
+
+    def _retry_send(self):
+        if self._last_send:
+            self.compose.show_waiting(self._last_send)
+            self._translate_async("out", self._last_send, tone=self.cfg.get("tone", "polite"))
+
+    def _pick_option(self, chinese: str, opt: dict):
+        """작성 도우미 창에서 후보를 고름 → 복사, 기록도 실제로 보낼 문장으로 바꿈."""
+        self._last_pick = chinese
+        self._copy(chinese)
+        e = next((h for h in self.history if h.get("id") == self._out_entry_id), None)
+        if e is not None:
+            e["zh"], e["back"] = chinese, opt.get("back_translation", "")
+            self._save()
+
+    def _show_compose(self):
+        """작성 도우미 창을 번역창 오른쪽에 같은 높이로 붙임 (자리가 없으면 번역창 위에 겹쳐서)."""
+        g = self.frameGeometry()
+        scr = (self.screen() or QGuiApplication.primaryScreen()).availableGeometry()
+        cw = 400
+        x = g.right() + 1 if g.right() + cw <= scr.right() else g.left()
+        self.compose.setGeometry(x, g.top(), cw, g.height())
+        self.compose.show()
+        self.compose.raise_()
+        try:
+            hwnd = int(self.compose.winId())
+            if self._owner:
+                win_window.set_owner(hwnd, self._owner)
+            win_window.style_like_wechat(hwnd)
+        except Exception:
+            pass
 
     def _insert_phrase(self, phrase):
         self.input.insertPlainText(phrase)
         self.input.setFocus()
-
-    def _show_result(self, entry):
-        self.res_zh.setText(entry["zh"])
-        back = "↩ " + entry.get("back", "")
-        if entry.get("note"):
-            back += "\n※ " + entry["note"]
-        self.res_back.setText(back)
-        self._copy(entry["zh"])
 
     def _copy(self, text):
         QGuiApplication.clipboard().setText(text)
@@ -1023,9 +1092,8 @@ class Panel(QWidget):
         self.copy_lbl.setText("✓ 복사됨 · 위챗 입력창에 Ctrl+V")
 
     def _recopy(self):
-        t = self.res_zh.text()
-        if t and t != "번역 중...":
-            self._copy(t)
+        if self._last_pick:
+            self._copy(self._last_pick)
 
     # ------------------------------------------------------------ 자동 업데이트
     def _check_update(self, manual: bool = False):
@@ -1185,6 +1253,7 @@ class Panel(QWidget):
             self._gone_since = None
             if self.cfg.get("dock", True) and not self._hidden:
                 self.hide()
+                self.compose.hide()
                 self._hidden = True
         elif self._wechat_seen and sys.platform == "win32":
             if self._gone_since is None:
@@ -1195,6 +1264,7 @@ class Panel(QWidget):
 
     def quit(self):
         try:
+            self.compose.hide()
             self.reader.stop()
         finally:
             QApplication.instance().quit()

@@ -134,6 +134,11 @@ def normalize(text: str) -> str:
     return re.sub(r"\s+", "", text)
 
 
+def memory_key(text: str) -> str:
+    """번역 기억용 열쇠: 띄어쓰기·문장부호 차이(글자 인식에서 ，와 , 가 섞이는 것 등)는 무시."""
+    return re.sub(r"[\s，。、,.!！?？~～…:：;；\"'“”‘’()（）\[\]【】]+", "", text).lower()
+
+
 def similar(a: str, b: str, threshold: float = 0.85) -> bool:
     a, b = normalize(a), normalize(b)
     if not a or not b:

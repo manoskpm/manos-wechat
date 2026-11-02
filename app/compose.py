@@ -117,6 +117,7 @@ class ComposeWindow(QWidget):
             self.body.takeAt(0)
 
     def show_waiting(self, mine: str):
+        self._close_timer.stop()
         self._clear()
         self._add(self._label("내가 쓴 말", "mine"))
         self._add(self._label(mine, "ctitle", wrap=True))
@@ -124,6 +125,7 @@ class ComposeWindow(QWidget):
         self.body.addStretch(1)
 
     def show_options(self, mine: str, options: list, note: str = ""):
+        self._close_timer.stop()
         self._clear()
         self._add(self._label("내가 쓴 말", "mine"))
         self._add(self._label(mine, "ctitle", wrap=True))
@@ -149,6 +151,31 @@ class ComposeWindow(QWidget):
             holder = QWidget()
             holder.setLayout(row)
             self._add(holder)
+
+    def mark_first(self):
+        """추천(첫 번째) 문장은 미리 복사해 두었다는 표시 (창은 닫지 않음)."""
+        first = next((o for o in self._widgets if isinstance(o, _Option)), None)
+        if first:
+            first.set_picked(True)
+
+    def show_reading(self, zh: str, ko: str, nuance: str = ""):
+        """업체 글을 복사(Ctrl+C)했을 때: 원문과 번역을 크게."""
+        self._close_timer.stop()
+        self._clear()
+        self._add(self._label("복사한 업체 글", "mine"))
+        self._add(self._label(zh, "ctitle", wrap=True))
+        self._add(self._label("번역", "mine"))
+        ko_lab = self._label(ko, "zh", wrap=True)
+        ko_lab.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self._add(ko_lab)
+        if nuance:
+            box = QFrame()
+            box.setObjectName("notebox")
+            bl = QVBoxLayout(box)
+            bl.setContentsMargins(12, 8, 12, 8)
+            bl.addWidget(self._label("💡 " + nuance, "note", wrap=True))
+            self._add(box)
+        self.body.addStretch(1)
 
     def show_error(self, msg: str):
         self._clear()

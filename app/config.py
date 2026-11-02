@@ -164,3 +164,47 @@ def archive_temp_histories(everything: bool = False) -> None:
 
 def history_exists(vendor: str) -> bool:
     return (data_dir() / "history" / f"{_safe_name(vendor)}.json").exists()
+
+
+MEMORY_MAX = 5000
+
+
+def memory_path() -> Path:
+    return data_dir() / "memory.json"
+
+
+def load_memory() -> dict:
+    """번역 기억: 한 번 번역한 글은 다음부터 AI 없이 바로 씀 (모든 대화방 공통, 이 컴퓨터에만 저장).
+    in: 업체 중국어 → 한국어, out: (말투, 대표 한국어) → 보낼 문장 후보."""
+    try:
+        m = json.loads(memory_path().read_text(encoding="utf-8"))
+        if isinstance(m, dict):
+            m.setdefault("in", {})
+            m.setdefault("out", {})
+            return m
+    except (OSError, ValueError):
+        pass
+    # 처음에는 지금까지 쌓인 대화 기록에서 번역 기억을 채움
+    mem = {"in": {}, "out": {}}
+    from .chat_parser import memory_key
+    for f in sorted((data_dir() / "history").glob("*.json"), key=lambda f: f.stat().st_mtime):
+        try:
+            for h in json.loads(f.read_text(encoding="utf-8")):
+                zh, ko = h.get("zh", ""), h.get("ko", "")
+                if ko and zh and h.get("src") != "panel" and re.search(r"[\u4e00-\u9fff]", zh):
+                    mem["in"][memory_key(zh)] = {"ko": ko, "nuance": h.get("nuance", ""),
+                                               "certainty": h.get("certainty", "none")}
+        except (OSError, ValueError, AttributeError):
+            continue
+    return mem
+
+
+def save_memory(mem: dict) -> None:
+    for k in ("in", "out"):
+        d = mem.get(k, {})
+        while len(d) > MEMORY_MAX:   # 오래된 것부터 정리
+            d.pop(next(iter(d)))
+    try:
+        memory_path().write_text(json.dumps(mem, ensure_ascii=False), encoding="utf-8")
+    except OSError:
+        pass

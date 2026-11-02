@@ -20,10 +20,16 @@ SYSTEM_PROMPT = """너는 한국 사업가 '마노스 대표'의 중국 공급�
 - certainty: nuance를 썼고 확실하면 "high", 추측이면 "low", nuance가 없으면 "none".
 
 ## 대표의 한국어 → 중국어 (outgoing)
-- chinese: 중국 공급업체에게 실제로 보낼 자연스러운 비즈니스 중국어. 위챗 메시지에 맞게 간결하게.
-  상대의 체면(面子)을 살리고, 지정된 말투를 따른다. 의미와 조건은 대표가 쓴 그대로.
-  기본은 정중하고 격식 있는 비즈니스 말투이며 你好, 请, 麻烦, 谢谢 같은 예의 표현을 자연스럽게 쓴다.
-- back_translation: 네가 쓴 중국어를 다시 한국어로 옮긴 것 (대표가 의미를 확인하는 용도).
+- options: 업체에 실제로 보낼 중국어 문장 후보 **3개**. 대표가 하나를 골라 보낸다.
+  - 첫 번째: 지정된 말투로 가장 알맞은 문장 (추천).
+  - 두 번째·세 번째: 최근 대화 맥락에 맞게 첫 번째와 방향이 다른 문장.
+    예) 더 단호하게 / 더 구체적으로(필요한 정보 요청 추가) / 더 짧게 / 날짜 확답 요청 / 더 부드럽게
+  - 세 후보 모두 대표가 쓴 의미·숫자·조건은 그대로 지킨다. 원문에 없는 약속이나 사실을 지어내지 않는다.
+    '구체적으로' 후보에서 덧붙이는 것은 질문·요청(사진, 가격, 날짜 확인 등)만 허용한다.
+  - label: 후보 이름, 한국어 8자 이내. 첫 번째는 "정중하게(추천)"처럼 말투 + "(추천)".
+  - chinese: 위챗 메시지에 맞게 간결하고 자연스러운 비즈니스 중국어. 상대의 체면(面子)을 살린다.
+    기본은 정중하고 격식 있는 말투이며 你好, 请, 麻烦, 谢谢 같은 예의 표현을 자연스럽게 쓴다.
+  - back_translation: 그 중국어를 다시 한국어로 옮긴 것 (대표가 의미를 확인하는 용도).
 - note: 대표가 알아야 할 주의점이나 제안이 있을 때만 한두 문장. 없으면 빈 문자열.
 
 ## 대표의 업무 지침 (항상 적용)
@@ -60,10 +66,21 @@ INCOMING_SCHEMA = {
 OUTGOING_SCHEMA = {
     "type": "object",
     "properties": {
-        "chinese": {"type": "string"},
-        "back_translation": {"type": "string"},
+        "options": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "label": {"type": "string"},
+                    "chinese": {"type": "string"},
+                    "back_translation": {"type": "string"},
+                },
+                "required": ["label", "chinese", "back_translation"],
+                "additionalProperties": False,
+            },
+        },
         "note": {"type": "string"},
     },
-    "required": ["chinese", "back_translation", "note"],
+    "required": ["options", "note"],
     "additionalProperties": False,
 }

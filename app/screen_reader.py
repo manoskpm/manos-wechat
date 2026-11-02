@@ -327,9 +327,19 @@ def chat_profile(img, box) -> np.ndarray | None:
     l, t, r, b = (int(v) for v in box)
     if r - l < 40 or b - t < 40:
         return None
-    g = np.asarray(img.convert("L").crop((l, t, r, b)), dtype=np.float32)
+    g = np.asarray(img.convert("RGB").crop((l, t, r, b)))[:, :, 1]   # 초록 채널만 (빠르고, 아래 빠른 찍기와 같은 값)
+    return _bands(g)
+
+
+def _bands(g) -> np.ndarray:
+    g = g[:, ::2].astype(np.float32)
     w = g.shape[1] // 8 * 8
     return g[:, :w].reshape(g.shape[0], 8, w // 8).mean(axis=2)
+
+
+def profile_from_bgra(raw: bytes, w: int, h: int) -> np.ndarray:
+    """화면 찍기 결과(BGRA)에서 바로 줄별 밝기 (그림으로 바꾸지 않아서 빠름)."""
+    return _bands(np.frombuffer(raw, dtype=np.uint8).reshape(h, w, 4)[:, :, 1])
 
 
 def _shift_err(prev, cur, d):
@@ -338,7 +348,7 @@ def _shift_err(prev, cur, d):
     return float(np.abs(x - y).mean())
 
 
-def estimate_shift(prev: np.ndarray | None, cur: np.ndarray | None) -> int | None:
+def estimate_shift(prev: np.ndarray | None, cur: np.ndarray | None, hint: int = 0) -> int | None:
     """위챗을 스크롤했을 때 화면이 위아래로 몇 픽셀 움직였는지 (글자 인식 없이, 0.01초 안팎).
     양수 = 내용이 아래로 내려감(위쪽 옛날 대화를 봄). 확실하지 않으면 None."""
     if prev is None or cur is None or prev.shape != cur.shape:
@@ -346,6 +356,16 @@ def estimate_shift(prev: np.ndarray | None, cur: np.ndarray | None) -> int | Non
     h = prev.shape[0]
     if not (np.abs(prev - prev.mean(axis=0)).mean() > 2):   # 거의 빈 화면이면 판단 안 함
         return None
+    # 스크롤 중에는 직전 움직임 근처만 1줄 단위로 찾음 (아주 빠름)
+    if hint:
+        r = min(int(h * 0.4), abs(hint) * 2 + 60)
+        best, best_err = None, 1e9
+        for d in range(-r, r + 1):
+            err = _shift_err(prev, cur, d)
+            if err < best_err:
+                best, best_err = d, err
+        if best_err <= 2.0:
+            return best or None
     # 4줄 간격으로 대충 찾고 → 그 근처를 1줄 단위로 다듬음 (빠르게)
     a, b = prev[::4], cur[::4]
     n = a.shape[0]
@@ -417,6 +437,10 @@ class ScreenReader:
         self._last_res = None      # 마지막으로 읽은 결과 (스크롤하면 새로 보이는 부분만 읽기 위해)
         self._shift_acc = 0        # 마지막으로 읽은 뒤 스크롤한 거리
         self._moving_until = 0.0   # 이 시각까지는 스크롤 중으로 봄
+        self._last_dy = 0
+        self._last_full = 0.0
+        self._sct = None
+        self._sct_thread = None
         self._scan_cache: list = []   # 최근에 읽은 화면 (같은 화면이면 다시 읽지 않음)
         self.own_hwnd_getter = own_hwnd_getter
         self.log_path = log_path
@@ -433,13 +457,49 @@ class ScreenReader:
     def is_main_window(self, rect) -> bool:
         return looks_like_wechat_main(self._grab(rect))
 
+    def _sct_get(self):
+        """화면 찍기 도구는 한 번만 만들어 계속 씀 (매번 만들면 느림)."""
+        if self._sct is None or self._sct_thread != threading.get_ident():
+            import mss
+            self._sct, self._sct_thread = mss.mss(), threading.get_ident()
+        return self._sct
+
     def _grab(self, rect):
-        import mss
         from PIL import Image
         l, t, r, b = rect
-        with mss.mss() as sct:
-            shot = sct.grab({"left": l, "top": t, "width": r - l, "height": b - t})
-            return Image.frombytes("RGB", shot.size, shot.rgb)
+        try:
+            shot = self._sct_get().grab({"left": l, "top": t, "width": r - l, "height": b - t})
+        except Exception:
+            self._sct = None
+            raise
+        return Image.frombytes("RGB", shot.size, shot.rgb)
+
+    def _motion_tick(self, rect) -> bool:
+        """스크롤 따라가기 (빠른 길): 대화 영역만 찍어서 움직인 거리만 잼. 움직였거나 움직이는 중이면 True."""
+        box = self._chat_box
+        if not box or self._ref_profile is None or rect[3] - rect[1] != box[4]:
+            return False
+        l, t, r, b = (int(v) for v in box[:4])
+        try:
+            shot = self._sct_get().grab({"left": rect[0] + l, "top": rect[1] + t, "width": r - l, "height": b - t})
+        except Exception:
+            self._sct = None
+            return False
+        prof = profile_from_bgra(shot.bgra, shot.width, shot.height)
+        if prof.shape != self._ref_profile.shape:
+            return False
+        dy = estimate_shift(self._ref_profile, prof, hint=self._last_dy)
+        if dy:
+            self._ref_profile = prof
+            self._shift_acc += dy
+            self._last_dy = dy
+            self.on_shift(dy)
+            self._moving_until = time.time() + 0.35
+            return True
+        if time.time() < self._moving_until:
+            return True
+        self._last_dy = 0
+        return False
 
     def _get_ocr(self):
         if self._ocr is None:
@@ -647,7 +707,7 @@ class ScreenReader:
                 self._log(traceback.format_exc())
             # 스크롤 중에는 1초에 약 25번 확인해서 번역 칸이 부드럽게 따라가게, 멈추면 다시 느긋하게
             moving = time.time() < self._moving_until
-            time.sleep(0.04 if moving else min(self.cfg.get("poll_seconds", 0.5), 0.25))
+            time.sleep(0.008 if moving else min(self.cfg.get("poll_seconds", 0.5), 0.12))
 
     def _tick(self):
         if not self.enabled:
@@ -662,6 +722,11 @@ class ScreenReader:
         if fg not in (hwnd, self.own_hwnd_getter()):
             self.status = "위챗을 클릭하면 읽기 시작"
             return
+        if self.on_shift and self._motion_tick(rect):
+            return   # 스크롤 중 → 번역 칸만 따라 움직이고, 멈춘 뒤에 읽음
+        if time.time() - self._last_full < 0.25:
+            return   # 전체 화면 확인은 0.25초마다 (스크롤 시작은 위의 빠른 길이 0.12초마다 확인)
+        self._last_full = time.time()
         img = self._grab(rect)
         self._mask_own_panel(img, rect)
         sig = image_signature(img)

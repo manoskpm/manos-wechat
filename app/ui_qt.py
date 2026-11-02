@@ -14,7 +14,7 @@ import time
 import traceback
 import uuid
 
-from PySide6.QtCore import QPoint, QRect, QSize, Qt, QTimer
+from PySide6.QtCore import QObject, QPoint, QRect, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QColor, QFont, QGuiApplication, QIcon
 from PySide6.QtWidgets import (QApplication, QFileDialog, QFrame, QHBoxLayout, QInputDialog, QLabel, QLayout,
                                QLineEdit, QMenu, QMessageBox, QPlainTextEdit, QPushButton, QVBoxLayout, QWidget)
@@ -128,6 +128,10 @@ def needs_translation(text: str) -> bool:
     letters = re.findall(r"[A-Za-z\u00C0-\u024F\u0400-\u04FF\u0E00-\u0E7F\u3040-\u30FF]", text)
     hangul = len(re.findall(r"[\uac00-\ud7a3]", text))
     return len(letters) >= 2 and len(letters) > hangul
+
+
+class _Bridge(QObject):
+    shifted = Signal(int)
 
 
 class Bubble(QLabel):
@@ -432,8 +436,11 @@ class Panel(QWidget):
         self._build()
         self.set_vendor("")
 
+        # 스크롤 움직임은 대기 없이 바로 번역창으로 전달 (부드럽게)
+        self._bridge = _Bridge()
+        self._bridge.shifted.connect(self._handle_shift)
         self.reader = ScreenReader(self.cfg, lambda res: self.q.put(("scan", res)), self._own_hwnd,
-                                   log_path=self.log_path, on_shift=lambda dy: self.q.put(("shift", dy)))
+                                   log_path=self.log_path, on_shift=lambda dy: self._bridge.shifted.emit(dy))
         win_window.set_main_validator(self.reader.is_main_window)
         self.reader.start()
 

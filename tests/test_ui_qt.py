@@ -155,3 +155,17 @@ def test_similar_sentence_from_store_and_note_apply(panel):
     p._apply_note("날짜도 물어보세요 '什么时候发货'")
     p._drain_queue()
     assert len(calls) == 4 and "[함께 반영할 제안]" in calls[-1]["messages"][0]["content"]
+
+
+def test_scroll_moves_boxes_immediately(panel):
+    """위챗을 스크롤하면 글자 인식을 기다리지 않고 번역 칸이 같은 만큼 바로 움직임."""
+    p = panel
+    p.resize(400, 1100); p.show()
+    from PySide6.QtWidgets import QApplication
+    QApplication.processEvents()
+    _scan(p, "工厂丁", [5] * 1920, [("in", "你好"), ("in", "明天发货")])
+    _scan(p, "工厂丁", [5] * 1920, [("in", "你好"), ("in", "明天发货")])
+    before = sorted(w.y() for w in p.mirror._widgets)
+    p._handle_shift(100)
+    after = sorted(w.y() for w in p.mirror._widgets)
+    assert [b + 100 for b in before] == after

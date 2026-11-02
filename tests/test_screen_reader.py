@@ -68,3 +68,26 @@ def test_title_signature_separates_rooms_with_same_icons():
     a, b = title("나희씨 중국 메인직원"), title("A汇星盛通中韩双向")
     assert same_title(a, title("나희씨 중국 메인직원"))
     assert not same_title(a, b) and signature_distance(a, b) > 30
+
+
+def test_estimate_shift_follows_scroll():
+    """스크롤한 만큼(픽셀) 정확히 재고, 다른 화면이면 모른다고 함."""
+    import numpy as np
+    from PIL import Image, ImageDraw
+    from app.screen_reader import chat_profile, estimate_shift
+    rnd = np.random.RandomState(0)
+    base = Image.new("RGB", (500, 1200), (250, 250, 250))
+    d = ImageDraw.Draw(base)
+    for y in range(20, 1180, 70):           # 말풍선처럼 생긴 네모들
+        x = int(rnd.randint(30, 200))
+        d.rectangle([x, y, x + int(rnd.randint(60, 250)), y + int(rnd.randint(20, 50))],
+                    fill=tuple(int(v) for v in rnd.randint(150, 240, 3)))
+    arr = np.asarray(base)
+    box = (0, 100, 500, 1100)
+    p0 = chat_profile(base, box)
+    down = arr.copy(); down[220:1100] = arr[100:980]
+    assert estimate_shift(p0, chat_profile(Image.fromarray(down), box)) == 120
+    up = arr.copy(); up[100:1023] = arr[177:1100]
+    assert estimate_shift(p0, chat_profile(Image.fromarray(up), box)) == -77
+    other = Image.fromarray(np.full_like(arr, 250)); ImageDraw.Draw(other).rectangle([10, 300, 400, 900], fill=(30, 30, 30))
+    assert estimate_shift(p0, chat_profile(other, box)) is None

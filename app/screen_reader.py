@@ -322,11 +322,62 @@ def analyze_window(img, ocr_result, cfg: dict, last_chat_left: float | None = No
     return res
 
 
+def chat_profile(img, box) -> np.ndarray | None:
+    """스크롤 따라가기용: 대화 영역을 세로로 8칸으로 나눠 줄마다 평균 밝기 (줄 수 × 8)."""
+    l, t, r, b = (int(v) for v in box)
+    if r - l < 40 or b - t < 40:
+        return None
+    g = np.asarray(img.convert("L").crop((l, t, r, b)), dtype=np.float32)
+    w = g.shape[1] // 8 * 8
+    return g[:, :w].reshape(g.shape[0], 8, w // 8).mean(axis=2)
+
+
+def estimate_shift(prev: np.ndarray | None, cur: np.ndarray | None) -> int | None:
+    """위챗을 스크롤했을 때 화면이 위아래로 몇 픽셀 움직였는지 (글자 인식 없이, 0.01초 안팎).
+    양수 = 내용이 아래로 내려감(위쪽 옛날 대화를 봄). 확실하지 않으면 None."""
+    if prev is None or cur is None or prev.shape != cur.shape:
+        return None
+    h = prev.shape[0]
+    if not (np.abs(prev - prev.mean(axis=0)).mean() > 2):   # 거의 빈 화면이면 판단 안 함
+        return None
+    a, b = prev[::2], cur[::2]
+    n = a.shape[0]
+    best, best_err = None, 1e9
+    for d in range(-int(n * 0.7), int(n * 0.7) + 1):
+        if d >= 0:
+            x, y = a[:n - d], b[d:]
+        else:
+            x, y = a[-d:], b[:n + d]
+        err = float(np.abs(x - y).mean())
+        if err < best_err:
+            best, best_err = d, err
+    if best is None or best_err > 2.5:
+        return None
+    d = best * 2
+    # 2픽셀 단위로 찾은 것을 1픽셀 단위로 다듬음
+    fine = None
+    fine_err = 1e9
+    for dd in (d - 1, d, d + 1):
+        if abs(dd) >= h:
+            continue
+        x, y = (prev[:h - dd], cur[dd:]) if dd >= 0 else (prev[-dd:], cur[:h + dd])
+        err = float(np.abs(x - y).mean())
+        if err < fine_err:
+            fine, fine_err = dd, err
+    return fine if fine else None
+
+
 class ScreenReader:
-    def __init__(self, cfg: dict, on_scan, own_hwnd_getter, log_path=None):
-        """on_scan(ScanResult) 는 화면이 바뀌고 안정되었을 때 호출됨 (별도 스레드)."""
+    def __init__(self, cfg: dict, on_scan, own_hwnd_getter, log_path=None, on_shift=None):
+        """on_scan(ScanResult) 는 화면이 바뀌고 안정되었을 때 호출됨 (별도 스레드).
+        on_shift(dy) 는 스크롤로 화면이 dy 픽셀 움직였을 때 바로 호출됨 (번역 칸을 같이 움직이도록)."""
         self.cfg = cfg
         self.on_scan = on_scan
+        self.on_shift = on_shift
+        self._chat_box = None      # 마지막으로 읽은 대화 영역 (화면 픽셀)
+        self._ref_profile = None   # 번역 칸이 맞춰져 있는 화면의 줄별 밝기
+        self._last_profile = None
+        self._scan_cache: list = []   # 최근에 읽은 화면 (같은 화면이면 다시 읽지 않음)
         self.own_hwnd_getter = own_hwnd_getter
         self.log_path = log_path
         self.enabled = cfg.get("auto_read", True)
@@ -481,6 +532,27 @@ class ScreenReader:
         img.save(path)
         return True
 
+    @staticmethod
+    def _exact_key(img) -> bytes:
+        """같은 화면인지 확인용 (거의 그대로일 때만 같음)."""
+        import hashlib
+        small = np.asarray(img.convert("L").resize((160, 320)), dtype=np.uint8) // 12
+        return hashlib.md5(small.tobytes()).digest()
+
+    def _chat_changed(self, img) -> bool:
+        """대화 영역 안에서 말풍선 하나 정도 바뀐 것도 알아챔 (입력칸 커서 깜빡임은 무시)."""
+        if not self._chat_box or img.height != self._chat_box[4] or self._last_profile is None:
+            return False
+        prof = chat_profile(img, self._chat_box[:4])
+        return prof is not None and prof.shape == self._last_profile.shape and \
+            float(np.abs(prof - self._last_profile).max(axis=1).mean()) > 0.4
+
+    def _remember_box(self, img, res):
+        box = (res.chat_left + 4, res.chat_top + 2, (res.chat_right or img.width) - 22, res.chat_bottom - 2)
+        self._chat_box = box + (img.height,)
+        self._ref_profile = chat_profile(img, box)
+        self._last_profile = self._ref_profile
+
     def _mask_own_panel(self, img, rect):
         """번역 패널이 위챗 위에 겹쳐 있으면 그 부분은 지워서 패널 글자를 읽지 않게 함."""
         own = win_window.window_rect(self.own_hwnd_getter())
@@ -514,7 +586,7 @@ class ScreenReader:
             except Exception as e:  # 화면 읽기 오류로 프로그램 전체가 멈추지 않게
                 self.status = f"화면 읽기 오류: {e}"
                 self._log(traceback.format_exc())
-            time.sleep(self.cfg.get("poll_seconds", 1.5))
+            time.sleep(min(self.cfg.get("poll_seconds", 0.5), 0.25))
 
     def _tick(self):
         if not self.enabled:
@@ -532,9 +604,16 @@ class ScreenReader:
         img = self._grab(rect)
         self._mask_own_panel(img, rect)
         sig = image_signature(img)
-        if signature_distance(sig, self._last_sig) <= 3.0:
+        if signature_distance(sig, self._last_sig) <= 3.0 and not self._chat_changed(img):
             self.status = "자동 읽기 중"
             return
+        # 스크롤: 화면이 위아래로 얼마나 움직였는지만 재서 번역 칸을 바로 같이 움직임 (글자 인식 전에)
+        if self._chat_box and self.on_shift and img.height == self._chat_box[4]:
+            prof = chat_profile(img, self._chat_box[:4])
+            dy = estimate_shift(self._ref_profile, prof)
+            if dy:
+                self._ref_profile = prof
+                self.on_shift(dy)
         # 스크롤 중일 수 있으니 0.12초 뒤 한 번 더 찍어서 같은 화면일 때(안정됐을 때) 읽음
         if signature_distance(sig, self._pending_sig) > 3.0:
             self._pending_sig = sig
@@ -547,8 +626,17 @@ class ScreenReader:
                 return
         self._last_sig = sig
         self.last_image = img
+        # 전에 읽은 화면과 같으면(다시 들어온 대화방 등) 글자 인식 없이 바로
+        key = self._exact_key(img)
+        cached = next((r for k, r in self._scan_cache if k == key), None)
+        if cached is not None:
+            self._remember_box(img, cached)
+            self.on_scan(cached)
+            return
         self.status = "읽는 중..."
         res = self.scan_image(img)
+        self._scan_cache = (self._scan_cache + [(key, res)])[-30:]
+        self._remember_box(img, res)
         self.status = "자동 읽기 중"
         self._log(f"scan vendor={res.vendor!r} 배율={res.timing.get('scale')} 글자읽기={res.timing.get('read')}초 "
                   f"전체={res.timing.get('total')}초 덩어리={[(i.kind, i.side) for i in res.items]}")

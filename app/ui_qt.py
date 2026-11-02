@@ -401,7 +401,7 @@ class Panel(QWidget):
         self.set_vendor("")
 
         self.reader = ScreenReader(self.cfg, lambda res: self.q.put(("scan", res)), self._own_hwnd,
-                                   log_path=self.log_path)
+                                   log_path=self.log_path, on_shift=lambda dy: self.q.put(("shift", dy)))
         win_window.set_main_validator(self.reader.is_main_window)
         self.reader.start()
 
@@ -906,6 +906,27 @@ class Panel(QWidget):
         else:
             self._render_mirror()
 
+    def _handle_shift(self, dy: int):
+        """위챗을 스크롤한 만큼 번역 칸도 바로 같이 움직임 (새로 보이는 부분은 곧 글자 인식으로 채움)."""
+        res = self._last_res
+        if res is None:
+            return
+        import copy
+        moved = copy.copy(res)
+        items = []
+        for it in res.items:
+            n = copy.copy(it)
+            n.y0, n.y1 = it.y0 + dy, it.y1 + dy
+            n.extra = dict(it.extra)
+            if "avatar" in n.extra:
+                ax0, ay0, ax1, ay1 = n.extra["avatar"]
+                n.extra["avatar"] = (ax0, ay0 + dy, ax1, ay1 + dy)
+            if n.y1 > res.chat_top and n.y0 < res.chat_bottom:
+                items.append(n)
+        moved.items = items
+        self._last_res = moved
+        self._render_mirror()
+
     def _match_layout(self, res):
         """번역창의 제목 줄·입력칸 높이를 위챗과 같게 → 말풍선 높이가 그대로 맞음."""
         dpr = self.devicePixelRatioF() or 1.0
@@ -1227,6 +1248,8 @@ class Panel(QWidget):
                 kind = item[0]
                 if kind == "scan":
                     self._handle_scan(item[1])
+                elif kind == "shift":
+                    self._handle_shift(item[1])
                 elif kind == "done":
                     self._handle_done(*item[1:])
                     self._status = ""

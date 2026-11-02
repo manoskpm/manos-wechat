@@ -4,6 +4,8 @@
 """
 from __future__ import annotations
 
+import html
+import re
 import sys
 
 from PySide6.QtCore import Qt, QTimer, Signal
@@ -28,9 +30,28 @@ QLabel#ko {{ font-size: 14px; color: #7a7a7a; }}
 QLabel#copied {{ font-size: 13px; color: {GREEN}; }}
 QLabel#note {{ font-size: 14px; color: #b36b00; }}
 QFrame#notebox {{ background: #fff8ec; border-radius: 8px; }}
+QPushButton#apply {{ border: 1px solid #f0c27a; background: white; color: #b36b00; font-size: 13px;
+                    border-radius: 12px; padding: 4px 12px; }}
+QPushButton#apply:hover {{ background: #fff1d6; }}
 QPushButton#flat {{ border: none; background: transparent; color: #4a4a4f; font-size: 13px; padding: 2px 6px; }}
 QPushButton#flat:hover {{ background: rgba(0,0,0,0.06); border-radius: 4px; }}
 """
+
+
+CJK_RUN = re.compile(r"[0-9A-Za-z]*[\u4e00-\u9fff][\u4e00-\u9fff0-9A-Za-z，。？！、～~]*")
+
+
+def note_html(note: str) -> str:
+    """메모 속 중국어 부분에 밑줄 → 누르면 그 부분만 복사."""
+    from urllib.parse import quote
+    out, last = [], 0
+    for m in CJK_RUN.finditer(note):
+        zh = m.group(0).strip()
+        out.append(html.escape(note[last:m.start()]))
+        out.append(f'<a href="copy:{quote(zh)}" style="color:#576b95;">{html.escape(m.group(0))}</a>')
+        last = m.end()
+    out.append(html.escape(note[last:]))
+    return "※ " + "".join(out)
 
 
 class _Option(QFrame):
@@ -76,12 +97,13 @@ class _Option(QFrame):
 class ComposeWindow(QWidget):
     """보낼 문장 고르기 창. on_pick(chinese, option) 은 후보를 눌렀을 때 호출."""
 
-    def __init__(self, on_pick, on_retry=None, parent=None):
+    def __init__(self, on_pick, on_retry=None, on_copy=None, on_apply=None, parent=None):
         super().__init__(parent, Qt.FramelessWindowHint | Qt.Tool)
         self.setObjectName("compose")
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.setStyleSheet(STYLE)
         self._on_pick, self._on_retry = on_pick, on_retry
+        self._on_copy, self._on_apply = on_copy, on_apply
         self._close_timer = QTimer(self)
         self._close_timer.setSingleShot(True)
         self._close_timer.timeout.connect(self.hide)
@@ -134,12 +156,7 @@ class ComposeWindow(QWidget):
             w.clicked.connect(self._picked)
             self._add(w)
         if note:
-            box = QFrame()
-            box.setObjectName("notebox")
-            bl = QVBoxLayout(box)
-            bl.setContentsMargins(12, 8, 12, 8)
-            bl.addWidget(self._label("※ " + note, "note", wrap=True))
-            self._add(box)
+            self._add(self._note_box(note))
         self.body.addStretch(1)
         if self._on_retry:
             row = QHBoxLayout()
@@ -151,6 +168,67 @@ class ComposeWindow(QWidget):
             holder = QWidget()
             holder.setLayout(row)
             self._add(holder)
+
+    def _note_box(self, note: str) -> QFrame:
+        """참고 메모: 드래그로 복사 가능, 속의 중국어는 누르면 바로 복사, [제안 반영해서 다시 만들기] 버튼."""
+        box = QFrame()
+        box.setObjectName("notebox")
+        bl = QVBoxLayout(box)
+        bl.setContentsMargins(12, 8, 12, 8)
+        bl.setSpacing(6)
+        lab = QLabel(note_html(note))
+        lab.setObjectName("note")
+        lab.setWordWrap(True)
+        lab.setTextFormat(Qt.RichText)
+        lab.setTextInteractionFlags(Qt.TextSelectableByMouse | Qt.LinksAccessibleByMouse)
+        lab.linkActivated.connect(self._copy_link)
+        bl.addWidget(lab)
+        row = QHBoxLayout()
+        self._note_copied = QLabel("")
+        self._note_copied.setObjectName("copied")
+        row.addWidget(self._note_copied, 1)
+        if self._on_apply:
+            apply = QPushButton("이 제안 반영해서 다시 만들기")
+            apply.setObjectName("apply")
+            apply.setCursor(Qt.PointingHandCursor)
+            apply.clicked.connect(lambda: self._on_apply(note))
+            row.addWidget(apply)
+        bl.addLayout(row)
+        return box
+
+    def _copy_link(self, href: str):
+        from urllib.parse import unquote
+        text = unquote(href[5:]) if href.startswith("copy:") else ""
+        if text and self._on_copy:
+            self._on_copy(text)
+            self._note_copied.setText(f"✓ '{text}' 복사됨")
+
+    def show_similar(self, mine: str, past_mine: str, options: list, on_new):
+        """전에 비슷하게 보낸 말이 있을 때: AI를 쓰기 전에 그 문장들을 먼저 보여 줌 (무료)."""
+        self._close_timer.stop()
+        self._clear()
+        self._add(self._label("내가 쓴 말", "mine"))
+        self._add(self._label(mine, "ctitle", wrap=True))
+        info = QFrame()
+        info.setObjectName("notebox")
+        il = QVBoxLayout(info)
+        il.setContentsMargins(12, 8, 12, 8)
+        il.addWidget(self._label("전에 비슷하게 보낸 말 (저장소에서, 무료)\n“" + past_mine + "”", "note", wrap=True))
+        self._add(info)
+        for i, opt in enumerate(options):
+            w = _Option(opt, best=(i == 0))
+            w.clicked.connect(self._picked)
+            self._add(w)
+        self.body.addStretch(1)
+        row = QHBoxLayout()
+        row.addStretch(1)
+        new = QPushButton("새로 만들기 (AI 사용)")
+        new.setObjectName("apply")
+        new.clicked.connect(on_new)
+        row.addWidget(new)
+        holder = QWidget()
+        holder.setLayout(row)
+        self._add(holder)
 
     def mark_first(self):
         """추천(첫 번째) 문장은 미리 복사해 두었다는 표시 (창은 닫지 않음)."""

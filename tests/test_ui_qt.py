@@ -130,3 +130,28 @@ def test_memory_reuses_translations_without_api(panel):
     p._send()                                                    # 똑같이 쓴 말 → 후보도 기억에서 바로
     p._drain_queue()
     assert len(calls) == 2 and p.history[-1]["zh"] == "中:샘플 보내주세요"
+
+
+def test_similar_sentence_from_store_and_note_apply(panel):
+    """비슷한 말은 저장소에서 먼저(무료), 숫자가 다르면 새로. 참고 메모 반영 버튼은 AI로 다시."""
+    p = panel
+    calls = []
+    run = p.translator.run
+    p.translator.run = lambda req: (calls.append(req), run(req))[1]
+    _scan(p, "工厂丙", [9] * 1920, [("in", "你好")])
+    p.input.setPlainText("사장님 샘플 300개 보내주세요")
+    p._send(); p._drain_queue()
+    assert len(calls) == 2                                   # 你好 번역 1 + 보낼 문장 1
+    p.input.setPlainText("사장님, 샘플 300개 보내 주세요!")    # 거의 같은 말 → 저장소에서
+    p._send(); p._drain_queue()
+    assert len(calls) == 2
+    from app.compose import _Option
+    opts = [w for w in p.compose._widgets if isinstance(w, _Option)]
+    opts[0].clicked.emit(opts[0])
+    assert p.history[-1]["zh"] == "中:사장님 샘플 300개 보내주세요" and p.history[-1]["ko"] == "사장님, 샘플 300개 보내 주세요!"
+    p.input.setPlainText("사장님 샘플 500개 보내주세요")        # 숫자가 다르면 저장소 안 씀
+    p._send(); p._drain_queue()
+    assert len(calls) == 3
+    p._apply_note("날짜도 물어보세요 '什么时候发货'")
+    p._drain_queue()
+    assert len(calls) == 4 and "[함께 반영할 제안]" in calls[-1]["messages"][0]["content"]

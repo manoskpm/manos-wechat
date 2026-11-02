@@ -552,7 +552,8 @@ class Panel(QWidget):
         self._update_tone_label()
         # 보낼 문장 후보를 크게 보여 주는 작성 도우미 창 (번역 누를 때만 뜸)
         from .compose import ComposeWindow
-        self.compose = ComposeWindow(self._pick_option, on_retry=self._retry_send)
+        self.compose = ComposeWindow(self._pick_option, on_retry=self._retry_send,
+                                     on_copy=self._copy, on_apply=self._apply_note)
         self._last_send = ""
         self._last_tone = "polite"
         self._last_pick = ""
@@ -1014,7 +1015,8 @@ class Panel(QWidget):
                     "options": options, "note": data.get("note", "")}
                 C.save_memory(self.memory)
             self._show_compose()
-            self.compose.show_options(text, options, data.get("note", ""))
+            shown = text.split(self.APPLY_TAG)[0] + ("  (+ 제안 반영)" if self.APPLY_TAG in text else "")
+            self.compose.show_options(shown, options, data.get("note", ""))
             # 추천 문장은 바로 복사해 둠 (다른 후보를 누르면 그걸로 바뀜)
             self.compose.mark_first()
             self._last_pick = first["chinese"]
@@ -1047,22 +1049,70 @@ class Panel(QWidget):
         if m and m.get("options"):   # 전에 똑같이 쓴 말 → AI 없이 바로 (다시 만들기를 누르면 새로)
             self._handle_done("out", self.vendor, None, text, dict(m, _from_memory=True))
             return
+        past = self._similar_sent(text)
+        if past:   # 전에 비슷하게 보낸 말 → 먼저 보여 주고, 원하면 그때 AI로 새로
+            past_mine, pm = past
+            self._out_entry_id = None
+            self.compose.show_similar(text, past_mine, pm["options"],
+                                      lambda: (self.compose.show_waiting(text),
+                                               self._translate_async("out", text, tone=tone)))
+            return
         self.compose.show_waiting(text)
         self._translate_async("out", text, tone=tone)
+
+    def _similar_sent(self, text: str):
+        """번역 저장소에서 비슷한 한국어 문장 찾기 (85% 이상 비슷하고 숫자가 똑같을 때만)."""
+        import re
+        from difflib import SequenceMatcher
+        digits = re.findall(r"\d+", text)
+        key = memory_key(text)
+        best, best_r = None, 0.85
+        for k, v in self.memory["out"].items():
+            mine = k.split("|", 1)[1] if "|" in k else k
+            if self.APPLY_TAG in mine or re.findall(r"\d+", mine) != digits or not v.get("options"):
+                continue
+            r = SequenceMatcher(None, key, memory_key(mine)).ratio()
+            if r >= best_r:
+                best, best_r = (mine, v), r
+        return best
 
     def _retry_send(self):
         if self._last_send:
             self.compose.show_waiting(self._last_send)
             self._translate_async("out", self._last_send, tone=self.cfg.get("tone", "polite"))
 
+    APPLY_TAG = "\n\n[함께 반영할 제안] "
+
+    def _apply_note(self, note: str):
+        """참고 메모의 제안을 넣어서 후보를 다시 만듦 (AI 1번 사용, 같은 제안이면 다음엔 기억에서)."""
+        base = self._last_send.split(self.APPLY_TAG)[0]
+        if not base:
+            return
+        text = base + self.APPLY_TAG + note
+        self._last_send = text
+        tone = self.cfg.get("tone", "polite")
+        self._last_tone = tone
+        m = self.memory["out"].get(tone + "|" + text)
+        if m and m.get("options"):
+            self._handle_done("out", self.vendor, None, text, dict(m, _from_memory=True))
+            return
+        self.compose.show_waiting(base + "  (+ 제안 반영)")
+        self._translate_async("out", text, tone=tone)
+
     def _pick_option(self, chinese: str, opt: dict):
         """작성 도우미 창에서 후보를 고름 → 복사, 기록도 실제로 보낼 문장으로 바꿈."""
         self._last_pick = chinese
         self._copy(chinese)
         e = next((h for h in self.history if h.get("id") == self._out_entry_id), None)
+        if e is None and self._last_send:   # 저장소에서 고른 문장도 대화 기록에 남김
+            e = {"id": uuid.uuid4().hex, "t": time.strftime("%Y-%m-%d %H:%M"), "side": "out", "src": "panel",
+                 "ko": self._last_send.split(self.APPLY_TAG)[0], "zh": "", "back": "", "note": ""}
+            self.history.append(e)
+            self._out_entry_id = e["id"]
         if e is not None:
             e["zh"], e["back"] = chinese, opt.get("back_translation", "")
             self._save()
+            self._render_mirror()
 
     def _show_compose(self):
         """작성 도우미 창을 번역창 오른쪽에 같은 높이로 붙임 (자리가 없으면 번역창 위에 겹쳐서)."""

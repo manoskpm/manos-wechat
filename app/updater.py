@@ -86,11 +86,20 @@ def pick_update(release: dict, cur: int) -> dict | None:
     return {"version": ver, "url": asset["browser_download_url"], "notes": notes[:600]}
 
 
-def download(url: str, progress=None) -> str:
-    """새 실행 파일을 지금 실행 파일 옆에 받아 둠. 받은 파일 경로를 돌려줌."""
-    target_dir = os.path.dirname(sys.executable)
-    new_path = os.path.join(target_dir, "ManosTranslator.new.exe")
-    with _open(url, 60) as r, open(new_path, "wb") as f:
+NEW_NAME = "ManosTranslator.new.exe"
+MARK_NAME = "ManosTranslator.new.json"
+
+
+def _dir() -> str:
+    return os.path.dirname(sys.executable)
+
+
+def download(url: str, progress=None, version: int | None = None) -> str:
+    """새 실행 파일을 지금 실행 파일 옆에 받아 둠 (다 받은 뒤에만 이름을 바꿔서, 받다 끊겨도 안전).
+    받은 파일 경로를 돌려줌."""
+    new_path = os.path.join(_dir(), NEW_NAME)
+    part = new_path + ".part"
+    with _open(url, 60) as r, open(part, "wb") as f:
         total = int(r.headers.get("Content-Length") or 0)
         done = 0
         while True:
@@ -101,15 +110,42 @@ def download(url: str, progress=None) -> str:
             done += len(chunk)
             if progress and total:
                 progress(done * 100 // total)
-    if os.path.getsize(new_path) < 5_000_000:  # 너무 작으면 잘못 받은 것
-        os.remove(new_path)
+    if os.path.getsize(part) < 5_000_000 or (total and os.path.getsize(part) != total):  # 덜 받았거나 잘못 받음
+        os.remove(part)
         raise OSError("업데이트 파일을 제대로 받지 못했습니다.")
+    os.replace(part, new_path)
+    with open(os.path.join(_dir(), MARK_NAME), "w", encoding="utf-8") as f:
+        json.dump({"version": version}, f)
     return new_path
 
 
-def apply_and_restart(new_path: str) -> None:
-    """프로그램이 꺼지면 새 파일로 바꿔 끼우고 다시 켜는 작은 배치 파일을 실행 (호출 뒤 프로그램 종료 필요)."""
+def pending_update() -> tuple[str, int] | None:
+    """미리 받아 둔 새 버전이 있으면 (파일 경로, 버전). 지금 버전보다 새것일 때만."""
+    if not can_update():
+        return None
+    new_path, mark = os.path.join(_dir(), NEW_NAME), os.path.join(_dir(), MARK_NAME)
+    try:
+        with open(mark, encoding="utf-8") as f:
+            ver = json.load(f).get("version")
+    except (OSError, ValueError):
+        return None
+    if not os.path.exists(new_path) or not isinstance(ver, int) or ver <= (current_version() or 0):
+        for pth in (new_path, mark):   # 이미 적용됐거나 오래된 파일은 정리
+            try:
+                os.remove(pth)
+            except OSError:
+                pass
+        return None
+    return new_path, ver
+
+
+def apply_and_restart(new_path: str, restart: bool = True, args: list | None = None) -> None:
+    """프로그램이 꺼지면 새 파일로 바꿔 끼우는 작은 배치 파일을 실행 (호출 뒤 프로그램 종료 필요).
+    restart=False 면 바꿔 끼우기만 하고 켜지 않음 (위챗을 꺼서 번역기가 꺼질 때)."""
     exe = sys.executable
+    mark = os.path.join(_dir(), MARK_NAME)
+    arg_text = " ".join(f'"{a}"' for a in (args or []))
+    start = f'start "" "{exe}" {arg_text}' if restart else "rem"
     bat = os.path.join(tempfile.gettempdir(), "manos_translator_update.bat")
     with open(bat, "w", encoding="mbcs" if sys.platform == "win32" else "utf-8") as f:
         f.write(f"""@echo off
@@ -121,7 +157,8 @@ if not errorlevel 1 goto done
 set /a tries+=1
 if %tries% lss 30 goto retry
 :done
-start "" "{exe}"
+del "{mark}" >nul 2>&1
+{start}
 del "%~f0"
 """)
     # 새 번역기가 예전 번역기의 임시 폴더를 물려받지 않도록 (PyInstaller 공식 방법)

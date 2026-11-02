@@ -391,6 +391,9 @@ class Panel(QWidget):
         self._hidden = False
         self._update_info = None
         self._manual_update_check = False
+        self._downloading = False
+        self._apply_when_ready = False
+        self._pending_update = None
         self._drag = None
         self._status = "시작 중..."
 
@@ -1169,29 +1172,52 @@ class Panel(QWidget):
         self._check_update(manual=True)
 
     def _show_update(self, info):
+        """새 버전 발견 → 뒤에서 몰래 받아 둠. 다 받으면 위챗을 끌 때(또는 버튼을 누르면 바로) 적용."""
         self._update_info = info
-        self.update_btn.setText(f"⬆ 업데이트 v{info['version']}")
-        self.update_btn.show()
+        pending = updater.pending_update()
+        if pending and pending[1] >= info["version"]:
+            self._update_ready(pending[0], pending[1])
+            return
+        if not self._downloading:
+            self._start_download(info, apply_now=False)
 
-    def _do_update(self):
-        info = self._update_info
-        if not info:
-            return
-        msg = f"새 버전(v{info['version']})으로 업데이트할까요?\n프로그램이 잠깐 꺼졌다가 자동으로 다시 켜집니다."
-        if info.get("notes"):
-            msg += "\n\n바뀐 점:\n" + info["notes"]
-        if QMessageBox.question(self, "업데이트", msg) != QMessageBox.Yes:
-            return
-        self.update_btn.setText("받는 중...")
-        self.update_btn.setEnabled(False)
+    def _start_download(self, info, apply_now: bool):
+        self._downloading = True
+        self._apply_when_ready = apply_now
+        if apply_now:
+            self.update_btn.setText("받는 중...")
+            self.update_btn.show()
 
         def work():
             try:
-                path = updater.download(info["url"], progress=lambda p: self.q.put(("update_progress", p)))
-                self.q.put(("update_ready", path))
+                path = updater.download(info["url"], version=info["version"],
+                                        progress=lambda p: self.q.put(("update_progress", p)))
+                self.q.put(("update_ready", path, info["version"]))
             except Exception as e:
                 self.q.put(("update_failed", str(e)))
         threading.Thread(target=work, daemon=True).start()
+
+    def _update_ready(self, path, version):
+        self._pending_update = path
+        self.update_btn.setText(f"⬆ v{version} 지금 적용")
+        self.update_btn.setEnabled(True)
+        self.update_btn.show()
+        self._write_log(f"새 버전 v{version} 받아 둠 (위챗을 끄면 적용)")
+
+    def _do_update(self):
+        """업데이트 버튼: 받아 둔 게 있으면 바로 적용(다시 켜짐), 없으면 받은 뒤 바로 적용."""
+        if self._pending_update:
+            self._save()
+            updater.apply_and_restart(self._pending_update, restart=True)
+            self._pending_update = None
+            self.quit()
+            return
+        self._apply_when_ready = True
+        self.update_btn.setEnabled(False)
+        if not self._downloading and self._update_info:
+            self._start_download(self._update_info, apply_now=True)
+        else:
+            self.update_btn.setText("받는 중...")
 
     # ------------------------------------------------------------ 반복 작업
     def _drain_queue(self):
@@ -1218,16 +1244,21 @@ class Panel(QWidget):
                     self._manual_update_check = False
                     self._info("업데이트 확인", item[1])
                 elif kind == "update_progress":
-                    self.update_btn.setText(f"받는 중 {item[1]}%")
+                    if self._apply_when_ready:
+                        self.update_btn.setText(f"받는 중 {item[1]}%")
                 elif kind == "update_ready":
-                    self._save()
-                    updater.apply_and_restart(item[1])
-                    self.quit()
-                    return
+                    self._downloading = False
+                    self._update_ready(item[1], item[2])
+                    if self._apply_when_ready:
+                        self._do_update()
+                        return
                 elif kind == "update_failed":
-                    self._log_error(f"업데이트 실패: {item[1]} 잠시 후 다시 시도해 주세요.")
-                    self.update_btn.setText("⬆ 업데이트")
-                    self.update_btn.setEnabled(True)
+                    self._downloading = False
+                    self._write_log(f"업데이트 받기 실패: {item[1]}")
+                    if self._apply_when_ready:
+                        self._log_error(f"업데이트 실패: {item[1]} 잠시 후 다시 시도해 주세요.")
+                        self.update_btn.setText("⬆ 업데이트")
+                        self.update_btn.setEnabled(True)
         except queue.Empty:
             pass
 
@@ -1315,6 +1346,10 @@ class Panel(QWidget):
     def quit(self):
         try:
             self.compose.hide()
+            # 받아 둔 새 버전이 있으면 꺼지는 김에 바꿔 끼움 → 다음에 켤 때 바로 새 버전
+            if self._pending_update:
+                updater.apply_and_restart(self._pending_update, restart=False)
+                self._pending_update = None
             self.reader.stop()
         finally:
             QApplication.instance().quit()

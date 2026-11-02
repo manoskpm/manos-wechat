@@ -17,6 +17,15 @@ def _message(text: str) -> None:
 
 
 def main():
+    # 미리 받아 둔 새 버전이 있으면 바꿔 끼우고 새 버전으로 바로 다시 켬 (몇 초)
+    try:
+        from app import updater
+        pending = updater.pending_update()
+        if pending and win_window.acquire_single_instance("ManosTranslator.Updating"):
+            updater.apply_and_restart(pending[0], restart=True, args=sys.argv[1:])
+            return
+    except Exception:
+        pass
     with_wechat = "--with-wechat" in sys.argv
     if with_wechat:
         from app import config as C

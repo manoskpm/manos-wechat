@@ -425,7 +425,7 @@ class Panel(QWidget):
             QTimer.singleShot(800, self._ask_wechat_path)
         if updater.can_update():
             QTimer.singleShot(5000, self._check_update)
-            self._every(6 * 3600 * 1000, self._check_update)
+            self._every(20 * 60 * 1000, self._check_update)   # 20분마다 새 버전 확인
         threading.Thread(target=shortcuts.fix_shortcut_icons, daemon=True).start()
 
     # ------------------------------------------------------------ 공통 도구
@@ -1215,9 +1215,11 @@ class Panel(QWidget):
     def _start_download(self, info, apply_now: bool):
         self._downloading = True
         self._apply_when_ready = apply_now
-        if apply_now:
-            self.update_btn.setText("받는 중...")
-            self.update_btn.show()
+        self._dl_version = info["version"]
+        # 뒤에서 받는 중에도 보이게 (안 보이면 업데이트가 안 되는 것처럼 보임)
+        self.update_btn.setText(f"⬇ v{info['version']} 받는 중")
+        self.update_btn.setEnabled(False)
+        self.update_btn.show()
 
         def work():
             try:
@@ -1244,11 +1246,10 @@ class Panel(QWidget):
             self.quit()
             return
         self._apply_when_ready = True
-        self.update_btn.setEnabled(False)
         if not self._downloading and self._update_info:
             self._start_download(self._update_info, apply_now=True)
-        else:
-            self.update_btn.setText("받는 중...")
+        self.update_btn.setEnabled(False)
+        self.update_btn.show()
 
     # ------------------------------------------------------------ 반복 작업
     def _drain_queue(self):
@@ -1277,8 +1278,8 @@ class Panel(QWidget):
                     self._manual_update_check = False
                     self._info("업데이트 확인", item[1])
                 elif kind == "update_progress":
-                    if self._apply_when_ready:
-                        self.update_btn.setText(f"받는 중 {item[1]}%")
+                    v = getattr(self, "_dl_version", "")
+                    self.update_btn.setText(f"⬇ v{v} 받는 중 {item[1]}%")
                 elif kind == "update_ready":
                     self._downloading = False
                     self._update_ready(item[1], item[2])
@@ -1288,6 +1289,8 @@ class Panel(QWidget):
                 elif kind == "update_failed":
                     self._downloading = False
                     self._write_log(f"업데이트 받기 실패: {item[1]}")
+                    self.update_btn.setText("⬆ 업데이트")
+                    self.update_btn.setEnabled(True)
                     if self._apply_when_ready:
                         self._log_error(f"업데이트 실패: {item[1]} 잠시 후 다시 시도해 주세요.")
                         self.update_btn.setText("⬆ 업데이트")

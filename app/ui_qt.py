@@ -120,6 +120,16 @@ class FlowLayout(QLayout):
         return y + line_h - rect.y()
 
 
+def needs_translation(text: str) -> bool:
+    """번역할 글인지: 중국어나 영어 등 외국 글자가 있으면 번역 (숫자·기호·한국어만 있으면 그대로)."""
+    import re
+    if CJK_RE.search(text):
+        return True
+    letters = re.findall(r"[A-Za-z\u00C0-\u024F\u0400-\u04FF\u0E00-\u0E7F\u3040-\u30FF]", text)
+    hangul = len(re.findall(r"[\uac00-\ud7a3]", text))
+    return len(letters) >= 2 and len(letters) > hangul
+
+
 class Bubble(QLabel):
     """위챗 말풍선 모양: 둥근 네모 + 프로필 사진 쪽을 가리키는 작은 꼬리."""
     TAIL = 6
@@ -688,7 +698,7 @@ class Panel(QWidget):
         if e is None:
             e = {"id": uuid.uuid4().hex, "t": time.strftime("%Y-%m-%d %H:%M"), "side": side, "kind": kind,
                  "zh": text, "ko": ""}
-            if not CJK_RE.search(text):  # 중국어가 없는 글(yes, OK, 숫자, 한국어)은 그대로
+            if not needs_translation(text):  # 숫자·기호·한국어만 있는 글은 그대로
                 e["ko"] = text
             else:
                 m = self.memory["in"].get(memory_key(text))   # 다른 대화방에서라도 전에 번역한 글이면 바로
@@ -752,7 +762,7 @@ class Panel(QWidget):
             elif it.kind == "notice":
                 if it.extra.get("recall") or RECALL_RE.search(it.text):
                     v["text"] = "↩ 메시지를 취소했습니다"
-                elif CJK_RE.search(it.text):
+                elif needs_translation(it.text):
                     e = self._entry_for("center", it.text, "notice")
                     v.update(text=e.get("ko") or it.text, entry=e, pending=not e.get("ko"))
                 else:
@@ -945,7 +955,7 @@ class Panel(QWidget):
             self._translate_entry(entry)
 
     def _remember_in(self, entry):
-        if entry.get("ko") and CJK_RE.search(entry.get("zh", "")):
+        if entry.get("ko") and needs_translation(entry.get("zh", "")):
             self.memory["in"][memory_key(entry["zh"])] = {"ko": entry["ko"], "nuance": entry.get("nuance", ""),
                                                          "certainty": entry.get("certainty", "none")}
             C.save_memory(self.memory)

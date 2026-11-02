@@ -94,7 +94,7 @@ def test_mirror_every_item_gets_a_box(panel):
     from PySide6.QtWidgets import QApplication
     QApplication.processEvents()
     mixed = [("time", "center", "Thursday 11:08"), ("text", "in", "单号：123 这个发了吗"),
-             ("photo", "in", ""), ("sticker", "in", ""), ("text", "out", "yes"),
+             ("photo", "in", ""), ("sticker", "in", ""), ("text", "out", "300"),
              ("file", "in", "报价单.xlsx 1.2M"), ("link", "in", "[Link] 新品"),
              ("transfer", "out", "¥170.00"), ("voice", "in", "5\""), ("video", "in", "0:35"),
              ("notice", "center", "对方撤回了一条消息"), ("unknown", "in", "")]
@@ -107,7 +107,7 @@ def test_mirror_every_item_gets_a_box(panel):
     texts = [t for t, _ in boxes]
     assert texts[0] == "목요일 11:08"
     assert texts[1].startswith("한:单号")                      # 单号 들어간 글도 빠지지 않음
-    assert texts[4] == "yes"                                   # 중국어 없는 글은 그대로
+    assert texts[4] == "300"                                   # 숫자만 있는 글은 그대로
     assert "이체 170.00위안" in texts[7] and "음성 5초" in texts[8] and "영상 0:35" in texts[9]
     assert "취소" in texts[10] and "읽지 못함" in texts[11]
 
@@ -169,3 +169,13 @@ def test_scroll_moves_boxes_immediately(panel):
     p._handle_shift(100)
     after = sorted(w.y() for w in p.mirror._widgets)
     assert [b + 100 for b in before] == after
+
+
+def test_english_is_translated(panel):
+    """영어로 쓴 글(대표가 직접 쓴 것 포함)도 번역. 숫자·한국어만 있는 글은 그대로."""
+    p = panel
+    _scan(p, "工厂戊", [11] * 1920, [("out", "How much is the unit price?"), ("in", "2026"), ("out", "감사합니다")])
+    _scan(p, "工厂戊", [11] * 1920, [("out", "How much is the unit price?"), ("in", "2026"), ("out", "감사합니다")])
+    kos = {h["zh"]: h["ko"] for h in p.history}
+    assert kos["How much is the unit price?"] == "한:How much is the unit price?"
+    assert kos["2026"] == "2026" and kos["감사합니다"] == "감사합니다"

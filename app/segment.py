@@ -44,6 +44,8 @@ def ko_time(text: str) -> str:
     out = text
     for k, v in sorted(KO_DAYS.items(), key=lambda kv: -len(kv[0])):
         out = re.sub(rf"\b{re.escape(k)}\b" if k.isascii() else re.escape(k), v, out, flags=re.I)
+    # 글자 인식이 날짜와 시간 사이 띄어쓰기를 빠뜨린 경우: 10/2314:33 → 10/23 14:33
+    out = re.sub(r"(\d{1,2}/\d{1,2})(\d{2}:\d{2})", r"\1 \2", out)
     out = re.sub(r"(\d{1,2}):(\d{2})\s*AM", r"오전 \1:\2", out, flags=re.I)
     out = re.sub(r"(\d{1,2}):(\d{2})\s*PM", r"오후 \1:\2", out, flags=re.I)
     return out

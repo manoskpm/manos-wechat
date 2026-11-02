@@ -367,6 +367,41 @@ def estimate_shift(prev: np.ndarray | None, cur: np.ndarray | None) -> int | Non
     return fine if fine else None
 
 
+def shift_result(res, dy: int):
+    """스크롤한 만큼 덩어리 위치를 옮긴 사본 (대화 영역 밖으로 나간 것은 뺌)."""
+    import copy
+    moved = copy.copy(res)
+    items = []
+    for it in res.items:
+        n = copy.copy(it)
+        n.y0, n.y1 = it.y0 + dy, it.y1 + dy
+        n.extra = dict(it.extra)
+        if "avatar" in n.extra:
+            ax0, ay0, ax1, ay1 = n.extra["avatar"]
+            n.extra["avatar"] = (ax0, ay0 + dy, ax1, ay1 + dy)
+        if n.y1 > res.chat_top and n.y0 < res.chat_bottom:
+            items.append(n)
+    moved.items = items
+    return moved
+
+
+def new_region(prev, dy: int):
+    """스크롤로 새로 보이게 된 줄 범위 (걸쳐 있는 덩어리는 통째로 포함). 너무 크면 None(전체 다시 읽기)."""
+    top, bottom = prev.chat_top, prev.chat_bottom
+    y0, y1 = (top, top + dy) if dy > 0 else (bottom + dy, bottom)
+    changed = True
+    while changed:
+        changed = False
+        for it in prev.items:
+            if it.y0 < y1 + 3 and it.y1 > y0 - 3 and (it.y0 < y0 or it.y1 > y1):
+                y0, y1 = min(y0, it.y0 - 4), max(y1, it.y1 + 4)
+                changed = True
+    y0, y1 = max(top, y0), min(bottom, y1)
+    if y1 - y0 > (bottom - top) * 0.6 or y1 <= y0:
+        return None
+    return y0, y1
+
+
 class ScreenReader:
     def __init__(self, cfg: dict, on_scan, own_hwnd_getter, log_path=None, on_shift=None):
         """on_scan(ScanResult) 는 화면이 바뀌고 안정되었을 때 호출됨 (별도 스레드).
@@ -377,6 +412,8 @@ class ScreenReader:
         self._chat_box = None      # 마지막으로 읽은 대화 영역 (화면 픽셀)
         self._ref_profile = None   # 번역 칸이 맞춰져 있는 화면의 줄별 밝기
         self._last_profile = None
+        self._last_res = None      # 마지막으로 읽은 결과 (스크롤하면 새로 보이는 부분만 읽기 위해)
+        self._shift_acc = 0        # 마지막으로 읽은 뒤 스크롤한 거리
         self._scan_cache: list = []   # 최근에 읽은 화면 (같은 화면이면 다시 읽지 않음)
         self.own_hwnd_getter = own_hwnd_getter
         self.log_path = log_path
@@ -405,11 +442,16 @@ class ScreenReader:
         if self._ocr is None:
             from rapidocr_onnxruntime import RapidOCR
             self._ocr = RapidOCR()
+            # 속도: 글자 찾기 단계가 작은 화면을 억지로 키우지 않게 (원래 크기 그대로 → 1.5~2배 빠름)
+            for op in getattr(getattr(self._ocr, "text_detector", None), "preprocess_op", []) or []:
+                if hasattr(op, "limit_type"):
+                    op.limit_type, op.limit_side_len = "max", 2000
         return self._ocr
 
-    def scan_image(self, full) -> ScanResult:
+    def scan_image(self, full, roi=None, prev=None) -> ScanResult:
         """위챗 화면 읽기. 속도를 위해 ① 화면 배율이 크면 기준 크기로 줄이고 ② 대화방 목록은 빼고
-        대화 영역만 글자 인식. 결과 위치는 다시 실제 화면 크기로 돌려 줌."""
+        대화 영역만 글자 인식. 결과 위치는 다시 실제 화면 크기로 돌려 줌.
+        roi=(위, 아래)와 prev(스크롤만큼 옮긴 이전 결과)를 주면 새로 보이게 된 줄만 읽어서 합침."""
         import numpy as np
         from PIL import Image
         t0 = time.perf_counter()
@@ -417,12 +459,16 @@ class ScreenReader:
         scale, cl = estimate_scale(full)
         img = full if scale == 1.0 else full.resize((round(full.width / scale), round(full.height / scale)),
                                                     Image.BILINEAR)
+        if roi is not None and (cl is None or prev is None):
+            roi = None
         if cl is not None:
             x0 = max(0, int(cl) - 2)
-            part = np.array(img.crop((x0, 0, img.width, img.height)))
+            ry0, ry1 = (0, img.height) if roi is None else (max(0, int(roi[0] / scale) - 2),
+                                                            min(img.height, int(roi[1] / scale) + 2))
+            part = np.array(img.crop((x0, ry0, img.width, ry1)))
             # 속도: 위챗 글자는 항상 바로 서 있으므로 글자 방향 확인 단계는 생략
             result, _ = self._get_ocr()(part, use_cls=False)
-            result = [[[[p[0] + x0, p[1]] for p in box], text, score] for box, text, score in (result or [])]
+            result = [[[[p[0] + x0, p[1] + ry0] for p in box], text, score] for box, text, score in (result or [])]
         else:
             result, _ = self._get_ocr()(np.array(img), use_cls=False)
         t1 = time.perf_counter()
@@ -444,8 +490,12 @@ class ScreenReader:
                   detect_input_box_top(img, res.chat_left, chat_right) or int(img.height * 0.76))
         bg = background_color(img, res.chat_left, res.title_h) or (250, 250, 250)
         res.chat_bg = tuple(bg[:3])
+        seg_top, seg_bottom = res.title_h, bottom
+        if roi is not None:
+            seg_top = max(res.title_h, int(roi[0] / scale) - 2)
+            seg_bottom = min(bottom, int(roi[1] / scale) + 2)
         items = segment_chat(img, to_lines(result, self.cfg["ocr_min_score"], 10),
-                             res.chat_left, chat_right, res.title_h, bottom, bg, ocr_fn=self._ocr_piece)
+                             res.chat_left, chat_right, seg_top, seg_bottom, bg, ocr_fn=self._ocr_piece)
         # 중국어 인식으로 읽은 제목은 중국어가 대부분일 때만 이름으로 씀 ('나무 옷걸이 lyt' → 'l lyt' 방지)
         v = res.vendor.replace(" ", "")
         cjk = sum(1 for ch in v if "\u4e00" <= ch <= "\u9fff")
@@ -464,6 +514,9 @@ class ScreenReader:
                 full.crop(box).save(buf, format="PNG")
                 it.extra["avatar"] = box
                 it.extra["avatar_png"] = buf.getvalue()
+        if roi is not None:   # 새로 읽은 줄 + 스크롤만큼 옮긴 나머지
+            keep = [it for it in prev.items if it.y1 <= roi[0] or it.y0 >= roi[1]]
+            items = sorted(keep + items, key=lambda it: it.y0)
         res.items = items
         res.chat_left = res.chat_left * scale
         res.title_h, res.band_h = S(res.title_h), S(res.band_h)
@@ -475,7 +528,10 @@ class ScreenReader:
         buf = io.BytesIO()
         title.save(buf, format="PNG")
         res.title_png = buf.getvalue()
-        res.timing = {"scale": round(scale, 2), "read": round(t1 - t0, 2),
+        if roi is not None and same_title(res.title_sig, prev.title_sig):
+            # 제목 줄은 이번에 글자 인식을 안 했으므로 이전 결과의 이름을 그대로
+            res.vendor, res.title_text = prev.vendor, prev.title_text
+        res.timing = {"scale": round(scale, 2), "read": round(t1 - t0, 2), "part": roi is not None,
                       "total": round(time.perf_counter() - t0, 2)}
         return res
 
@@ -613,6 +669,7 @@ class ScreenReader:
             dy = estimate_shift(self._ref_profile, prof)
             if dy:
                 self._ref_profile = prof
+                self._shift_acc += dy
                 self.on_shift(dy)
         # 스크롤 중일 수 있으니 0.12초 뒤 한 번 더 찍어서 같은 화면일 때(안정됐을 때) 읽음
         if signature_distance(sig, self._pending_sig) > 3.0:
@@ -634,7 +691,12 @@ class ScreenReader:
             self.on_scan(cached)
             return
         self.status = "읽는 중..."
-        res = self.scan_image(img)
+        roi = prev = None
+        if self._last_res is not None and self._shift_acc and self._chat_box and img.height == self._chat_box[4]:
+            prev = shift_result(self._last_res, self._shift_acc)
+            roi = new_region(prev, self._shift_acc)
+        res = self.scan_image(img, roi=roi, prev=prev)
+        self._last_res, self._shift_acc = res, 0
         self._scan_cache = (self._scan_cache + [(key, res)])[-30:]
         self._remember_box(img, res)
         self.status = "자동 읽기 중"

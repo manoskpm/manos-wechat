@@ -94,3 +94,34 @@ def test_real_screens_all_display_scales():
             r._chat_left = None
             got = " ".join(f"{i.kind}/{i.side}" for i in r.scan_image(img).items)
             assert got == EXPECTED[name], f"{name} x{s}"
+
+
+def test_partial_read_after_scroll_matches_full_read():
+    """스크롤하면 새로 보인 줄만 읽어서 합친 결과 = 화면 전체를 다시 읽은 결과."""
+    import os
+    import numpy as np
+    import pytest
+    from PIL import Image
+    f = os.path.join(os.path.dirname(__file__), "fixtures", "real_gabang.png")
+    if not os.path.exists(f):
+        pytest.skip("개인 화면 자료 없음")
+    from app.config import DEFAULTS
+    from app.screen_reader import ScreenReader, new_region, shift_result
+    r = ScreenReader(dict(DEFAULTS), None, lambda: None)
+    base = Image.open(f).convert("RGB")
+    first = r.scan_image(base)
+    top, bottom = first.chat_top + 1, first.chat_bottom - 1
+    clean = np.asarray(base).copy()
+    clean[top:top + 30] = (250, 250, 250)        # 맨 위에 잘려 보이던 조각은 지움
+    after = Image.fromarray(clean)                 # 스크롤한 뒤 화면 (아래에 새 대화가 보임)
+    dy = 160
+    before = clean.copy()                          # 스크롤 전: 내용이 dy 만큼 아래에 있었음
+    before[top + dy:bottom] = clean[top:bottom - dy]
+    before[top:top + dy] = (250, 250, 250)
+    prev = shift_result(r.scan_image(Image.fromarray(before)), -dy)
+    roi = new_region(prev, -dy)
+    assert roi is not None
+    part = r.scan_image(after, roi=roi, prev=prev)
+    full = r.scan_image(after)
+    sig = lambda res: [(i.kind, i.side, i.y0 // 4) for i in res.items]
+    assert part.timing["part"] and sig(part) == sig(full)

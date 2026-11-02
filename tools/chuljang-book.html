@@ -1,0 +1,385 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>중국 출장북</title>
+<style>
+:root {
+  --bg: #ededed; --card: #ffffff; --text: #191919; --sub: #7a7a7a; --line: #e5e5e5;
+  --green: #07c160; --greenbg: #e8f8ef; --zh: #111111; --star: #f5a623; --warn: #fa5151;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #111111; --card: #1e1e1e; --text: #e8e8e8; --sub: #9a9a9a; --line: #2c2c2c;
+          --greenbg: #12301f; --zh: #ffffff; }
+}
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body { margin: 0; background: var(--bg); color: var(--text);
+  font-family: -apple-system, "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", "PingFang SC", "Microsoft YaHei", sans-serif; }
+header { position: sticky; top: 0; z-index: 5; background: var(--bg); padding: 12px 16px 8px; }
+h1 { font-size: 20px; margin: 0 0 8px; }
+h1 small { font-size: 12px; color: var(--sub); font-weight: normal; margin-left: 6px; }
+#q { width: 100%; font-size: 16px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px;
+     background: var(--card); color: var(--text); }
+nav { display: flex; gap: 6px; overflow-x: auto; padding: 10px 0 2px; scrollbar-width: none; }
+nav::-webkit-scrollbar { display: none; }
+nav button { flex: none; border: 1px solid var(--line); background: var(--card); color: var(--text);
+  border-radius: 16px; padding: 6px 12px; font-size: 14px; }
+nav button.on { background: var(--green); border-color: var(--green); color: #fff; }
+main { padding: 4px 16px 40px; max-width: 720px; margin: 0 auto; }
+.sec { font-size: 13px; color: var(--sub); margin: 18px 4px 6px; }
+.item { background: var(--card); border-radius: 12px; padding: 12px 14px; margin-bottom: 8px; display: flex;
+  gap: 10px; align-items: flex-start; border: 1px solid var(--line); }
+.item .body { flex: 1; min-width: 0; cursor: pointer; }
+.ko { font-size: 14px; color: var(--sub); }
+.zh { font-size: 22px; color: var(--zh); margin: 4px 0 2px; word-break: keep-all; }
+.read { font-size: 13px; color: var(--green); }
+.py { font-size: 12px; color: var(--sub); margin-left: 6px; }
+.star { border: none; background: none; font-size: 22px; color: var(--line); padding: 0 2px; }
+.star.on { color: var(--star); }
+.empty { color: var(--sub); text-align: center; padding: 40px 0; }
+.box { background: var(--card); border-radius: 12px; padding: 14px; border: 1px solid var(--line); margin-bottom: 10px; }
+.box label { font-size: 13px; color: var(--sub); display: block; margin-bottom: 6px; }
+.box input, .box textarea { width: 100%; font-size: 16px; padding: 8px 10px; border: 1px solid var(--line);
+  border-radius: 8px; background: var(--bg); color: var(--text); font-family: inherit; }
+.box .row { display: flex; gap: 8px; margin-top: 8px; }
+.btn { border: none; background: var(--green); color: #fff; border-radius: 8px; padding: 9px 14px; font-size: 15px; }
+.btn.gray { background: var(--line); color: var(--text); }
+.num-out { font-size: 30px; color: var(--zh); margin-top: 10px; word-break: break-all; }
+.num-read { font-size: 15px; color: var(--green); margin-top: 2px; }
+#big { position: fixed; inset: 0; background: var(--card); z-index: 20; display: none; flex-direction: column;
+  padding: 24px 20px calc(24px + env(safe-area-inset-bottom)); }
+#big.show { display: flex; }
+#big .zh { font-size: clamp(34px, 11vw, 72px); line-height: 1.25; flex: 1; display: flex; align-items: center;
+  justify-content: center; text-align: center; white-space: pre-line; }
+#big .ko { text-align: center; font-size: 16px; }
+#big .read { text-align: center; font-size: 16px; margin-top: 4px; }
+#big .row { display: flex; gap: 8px; justify-content: center; margin-top: 18px; flex-wrap: wrap; }
+#toast { position: fixed; left: 50%; bottom: 30px; transform: translateX(-50%); background: rgba(0,0,0,.8);
+  color: #fff; padding: 8px 14px; border-radius: 16px; font-size: 14px; display: none; z-index: 30; }
+.tip { font-size: 13px; color: var(--sub); line-height: 1.5; }
+.sos { color: var(--warn); font-weight: bold; }
+</style>
+</head>
+<body>
+<header>
+  <h1>중국 출장북 <small>인터넷 없이 됨 · 누르면 크게</small></h1>
+  <input id="q" type="search" placeholder="찾기 (예: 택시, 단가, 화장실)">
+  <nav id="tabs"></nav>
+</header>
+<main id="list"></main>
+
+<div id="big">
+  <div class="ko" id="bigKo"></div>
+  <div class="zh" id="bigZh"></div>
+  <div class="read" id="bigRead"></div>
+  <div class="row">
+    <button class="btn" id="bigSpeak">🔊 소리</button>
+    <button class="btn" id="bigCopy">복사</button>
+    <button class="btn gray" id="bigClose">닫기</button>
+  </div>
+</div>
+<div id="toast"></div>
+
+<script>
+// [한국어, 중국어, 병음, 한글 읽기]
+const DATA = {
+  "공항·입국": [
+    ["출장 왔어요", "我来出差。", "wǒ lái chūchāi", "워 라이 추차이"],
+    ["관광하러 왔어요", "我来旅游。", "wǒ lái lǚyóu", "워 라이 뤼여우"],
+    ["7일 있어요", "待七天。", "dāi qī tiān", "다이 치 톈"],
+    ["호텔에 묵어요", "我住酒店。", "wǒ zhù jiǔdiàn", "워 주 지우뎬"],
+    ["한 번만 더 말해 주세요", "请再说一遍。", "qǐng zài shuō yí biàn", "칭 짜이 숴 이 볜"],
+    ["천천히 말해 주세요", "请说慢一点。", "qǐng shuō màn yìdiǎn", "칭 숴 만 이뎬"],
+    ["저 중국어 못해요", "我不会说中文。", "wǒ bú huì shuō zhōngwén", "워 부 후이 숴 중원"],
+    ["짐은 어디서 찾아요?", "行李在哪里取？", "xíngli zài nǎlǐ qǔ", "싱리 짜이 나리 취"],
+    ["환전 어디서 해요?", "哪里可以换钱？", "nǎlǐ kěyǐ huàn qián", "나리 커이 환 첸"],
+    ["유심(전화 카드) 사고 싶어요", "我想买电话卡。", "wǒ xiǎng mǎi diànhuàkǎ", "워 샹 마이 뎬화카"],
+  ],
+  "택시·이동": [
+    ["이 주소로 가 주세요", "请带我去这个地址。", "qǐng dài wǒ qù zhège dìzhǐ", "칭 따이 워 취 저거 디즈"],
+    ["여기서 세워 주세요", "请在这里停车。", "qǐng zài zhèlǐ tíngchē", "칭 짜이 저리 팅처"],
+    ["공항으로 가 주세요", "请去机场。", "qǐng qù jīchǎng", "칭 취 지창"],
+    ["기차역으로 가 주세요", "请去火车站。", "qǐng qù huǒchēzhàn", "칭 취 훠처잔"],
+    ["얼마나 걸려요?", "要多长时间？", "yào duō cháng shíjiān", "야오 둬 창 스젠"],
+    ["얼마예요?", "多少钱？", "duōshao qián", "둬사오 첸"],
+    ["지하철역 어디예요?", "地铁站在哪里？", "dìtiězhàn zài nǎlǐ", "디톄잔 짜이 나리"],
+    ["영수증 주세요", "请给我发票。", "qǐng gěi wǒ fāpiào", "칭 게이 워 파퍄오"],
+    ["디디(택시) 불러 줄 수 있어요?", "能帮我叫个滴滴吗？", "néng bāng wǒ jiào ge dīdī ma", "넝 방 워 자오 거 디디 마"],
+  ],
+  "호텔": [
+    ["체크인할게요", "我要办入住。", "wǒ yào bàn rùzhù", "워 야오 반 루주"],
+    ["예약했어요", "我有预订。", "wǒ yǒu yùdìng", "워 여우 위딩"],
+    ["체크아웃할게요", "我要退房。", "wǒ yào tuìfáng", "워 야오 퉤이팡"],
+    ["와이파이 비밀번호가 뭐예요?", "WiFi密码是多少？", "WiFi mìmǎ shì duōshao", "와이파이 미마 스 둬사오"],
+    ["짐 맡아 줄 수 있어요?", "可以寄存行李吗？", "kěyǐ jìcún xíngli ma", "커이 지춘 싱리 마"],
+    ["에어컨이 고장났어요", "空调坏了。", "kōngtiáo huài le", "쿵탸오 화이 러"],
+    ["아침은 몇 시예요?", "早餐几点？", "zǎocān jǐ diǎn", "짜오찬 지 뎬"],
+    ["수건 더 주세요", "请再给我一条毛巾。", "qǐng zài gěi wǒ yì tiáo máojīn", "칭 짜이 게이 워 이 탸오 마오진"],
+  ],
+  "식당": [
+    ["메뉴 주세요", "请给我菜单。", "qǐng gěi wǒ càidān", "칭 게이 워 차이단"],
+    ["두 명이에요", "两个人。", "liǎng ge rén", "량 거 런"],
+    ["이거 주세요", "我要这个。", "wǒ yào zhège", "워 야오 저거"],
+    ["맵지 않게 해 주세요", "不要辣。", "bú yào là", "부 야오 라"],
+    ["고수 빼 주세요", "不要香菜。", "bú yào xiāngcài", "부 야오 샹차이"],
+    ["물 한 잔 주세요", "请给我一杯水。", "qǐng gěi wǒ yì bēi shuǐ", "칭 게이 워 이 베이 수이"],
+    ["포장해 주세요", "打包。", "dǎbāo", "다바오"],
+    ["계산할게요", "买单。", "mǎidān", "마이단"],
+  ],
+  "결제": [
+    ["위챗페이 돼요?", "可以用微信支付吗？", "kěyǐ yòng wēixìn zhīfù ma", "커이 융 웨이신 즈푸 마"],
+    ["알리페이 돼요?", "可以用支付宝吗？", "kěyǐ yòng zhīfùbǎo ma", "커이 융 즈푸바오 마"],
+    ["카드 돼요?", "可以刷卡吗？", "kěyǐ shuākǎ ma", "커이 솨카 마"],
+    ["현금으로 낼게요", "我付现金。", "wǒ fù xiànjīn", "워 푸 셴진"],
+    ["제가 QR 찍을게요", "我扫你吧。", "wǒ sǎo nǐ ba", "워 싸오 니 바"],
+    ["제 QR 찍어 주세요", "你扫我吧。", "nǐ sǎo wǒ ba", "니 싸오 워 바"],
+    ["영수증(세금계산서) 주세요", "请开发票。", "qǐng kāi fāpiào", "칭 카이 파퍄오"],
+  ],
+  "공장·시장": [
+    ["안녕하세요, 한국에서 왔어요", "你好，我是从韩国来的。", "nǐ hǎo, wǒ shì cóng Hánguó lái de", "니하오, 워 스 충 한궈 라이 더"],
+    ["샘플 볼 수 있어요?", "可以看看样品吗？", "kěyǐ kànkan yàngpǐn ma", "커이 칸칸 양핀 마"],
+    ["사진 찍어도 돼요?", "可以拍照吗？", "kěyǐ pāizhào ma", "커이 파이자오 마"],
+    ["단가가 얼마예요?", "单价多少？", "dānjià duōshao", "단쟈 둬사오"],
+    ["최소 주문 수량이 얼마예요?", "起订量是多少？", "qǐdìngliàng shì duōshao", "치딩량 스 둬사오"],
+    ["납기는 며칠 걸려요?", "交期要多久？", "jiāoqī yào duō jiǔ", "자오치 야오 둬 지우"],
+    ["재고 있어요?", "有现货吗？", "yǒu xiànhuò ma", "여우 셴훠 마"],
+    ["다른 색 있어요?", "有别的颜色吗？", "yǒu bié de yánsè ma", "여우 볘 더 옌써 마"],
+    ["로고 넣을 수 있어요?", "可以印logo吗？", "kěyǐ yìn logo ma", "커이 인 로고 마"],
+    ["포장은 어떻게 해요?", "怎么包装？", "zěnme bāozhuāng", "쩐머 바오좡"],
+    ["한 박스에 몇 개예요?", "一箱多少个？", "yì xiāng duōshao ge", "이 샹 둬사오 거"],
+    ["견적서 보내 주세요", "请发一下报价单。", "qǐng fā yíxià bàojiàdān", "칭 파 이샤 바오쟈단"],
+    ["위챗 추가해요", "加个微信吧。", "jiā ge wēixìn ba", "쟈 거 웨이신 바"],
+    ["명함 있어요?", "有名片吗？", "yǒu míngpiàn ma", "여우 밍폔 마"],
+  ],
+  "가격 협상": [
+    ["너무 비싸요", "太贵了。", "tài guì le", "타이 꾸이 러"],
+    ["좀 깎아 줄 수 있어요?", "能便宜一点吗？", "néng piányi yìdiǎn ma", "넝 폔이 이뎬 마"],
+    ["많이 주문하면 얼마예요?", "多订的话多少钱？", "duō dìng de huà duōshao qián", "둬 딩 더 화 둬사오 첸"],
+    ["1000개면 얼마예요?", "一千个多少钱？", "yì qiān ge duōshao qián", "이 첸 거 둬사오 첸"],
+    ["최저가가 얼마예요?", "最低多少？", "zuì dī duōshao", "쭈이 디 둬사오"],
+    ["오래 거래할 수 있어요", "我们可以长期合作。", "wǒmen kěyǐ chángqī hézuò", "워먼 커이 창치 허쭤"],
+    ["생각해 볼게요", "我考虑一下。", "wǒ kǎolǜ yíxià", "워 카오뤼 이샤"],
+    ["좋아요, 이걸로 할게요", "好的，就这个吧。", "hǎo de, jiù zhège ba", "하오더, 지우 저거 바"],
+    ["계약금은 얼마예요?", "定金多少？", "dìngjīn duōshao", "딩진 둬사오"],
+  ],
+  "배송·물류": [
+    ["한국으로 보내 주세요", "请发到韩国。", "qǐng fā dào Hánguó", "칭 파 다오 한궈"],
+    ["배송비 얼마예요?", "运费多少？", "yùnfèi duōshao", "윈페이 둬사오"],
+    ["언제 출고돼요?", "什么时候发货？", "shénme shíhou fāhuò", "선머 스허우 파훠"],
+    ["송장번호 보내 주세요", "请发一下快递单号。", "qǐng fā yíxià kuàidì dānhào", "칭 파 이샤 콰이디 단하오"],
+    ["이게 저희 물류 회사 주소예요", "这是我们物流公司的地址。", "zhè shì wǒmen wùliú gōngsī de dìzhǐ", "저 스 워먼 우류 궁쓰 더 디즈"],
+    ["포장 튼튼하게 해 주세요", "请包装结实一点。", "qǐng bāozhuāng jiēshi yìdiǎn", "칭 바오좡 제스 이뎬"],
+  ],
+  "긴급": [
+    ["도와주세요", "请帮帮我。", "qǐng bāngbang wǒ", "칭 방방 워"],
+    ["길을 잃었어요", "我迷路了。", "wǒ mílù le", "워 미루 러"],
+    ["화장실 어디예요?", "洗手间在哪里？", "xǐshǒujiān zài nǎlǐ", "시서우젠 짜이 나리"],
+    ["병원에 가야 해요", "我要去医院。", "wǒ yào qù yīyuàn", "워 야오 취 이위안"],
+    ["경찰 불러 주세요", "请报警。", "qǐng bàojǐng", "칭 바오징"],
+    ["여권을 잃어버렸어요", "我的护照丢了。", "wǒ de hùzhào diū le", "워 더 후자오 듀 러"],
+    ["한국 대사관으로 가 주세요", "请带我去韩国大使馆。", "qǐng dài wǒ qù Hánguó dàshǐguǎn", "칭 따이 워 취 한궈 다스관"],
+    ["휴대폰 충전할 수 있어요?", "可以充电吗？", "kěyǐ chōngdiàn ma", "커이 충뎬 마"],
+  ],
+};
+
+const DIGIT = ["零", "一", "二", "三", "四", "五", "六", "七", "八", "九"];
+const DIGIT_KO = ["링", "이", "얼", "싼", "쓰", "우", "류", "치", "빠", "지우"];
+const UNIT = ["", "十", "百", "千"], UNIT_KO = ["", "스", "바이", "첸"];
+
+// 숫자 → 중국어 (예: 3500 → 三千五百, 1.5 → 一点五)
+function toChinese(n) {
+  if (!/^\d{1,8}(\.\d{1,2})?$/.test(n)) return null;
+  let [ip, fp] = n.split(".");
+  if (fp) fp = fp.replace(/0+$/, "");   // 170.00 → 170
+  let zh = [], ko = [];
+  const part = (s) => {   // 0~9999
+    let z = "", k = [], zero = false;
+    const d = s.padStart(4, "0").split("").map(Number);
+    d.forEach((v, i) => {
+      const u = 3 - i;
+      if (v === 0) { zero = z.length > 0; return; }
+      if (zero) { z += "零"; k.push("링"); zero = false; }
+      const two = v === 2 && u >= 2;   // 200·2000 은 两百·两千 이 자연스러움
+      z += (two ? "两" : DIGIT[v]) + UNIT[u];
+      k.push((two ? "량" : DIGIT_KO[v]) + UNIT_KO[u]);
+    });
+    return [z, k.join(" ")];
+  };
+  const num = parseInt(ip, 10);
+  if (num === 0) { zh = ["零"]; ko = ["링"]; }
+  else {
+    const wan = Math.floor(num / 10000), rest = num % 10000;
+    if (wan) {
+      let [z, k] = part(String(wan));
+      if (wan === 2) { z = "两"; k = "량"; }   // 2만 = 两万
+      zh.push(z + "万"); ko.push(k + "완");
+    }
+    if (rest) {
+      const [z, k] = part(String(rest));
+      zh.push((wan && rest < 1000 ? "零" : "") + z);
+      ko.push((wan && rest < 1000 ? "링 " : "") + k);
+    }
+  }
+  let z = zh.join(""), k = ko.join(" ");
+  if (z.startsWith("一十")) { z = z.slice(1); k = k.replace(/^이스/, "스"); }   // 10~19 는 十로 시작
+  if (fp) { z += "点" + fp.split("").map(c => DIGIT[+c]).join(""); k += " 뎬 " + fp.split("").map(c => DIGIT_KO[+c]).join(" "); }
+  return [z, k];
+}
+
+const $ = (s) => document.querySelector(s);
+const store = {
+  get(k, d) { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch (e) { return d; } },
+  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} },
+};
+let favs = store.get("cj_favs", []);
+let tab = store.get("cj_tab", "★ 즐겨찾기");
+const TABS = ["★ 즐겨찾기", "📍 내 주소", "🔢 숫자", ...Object.keys(DATA)];
+
+function toast(msg) {
+  const t = $("#toast"); t.textContent = msg; t.style.display = "block";
+  clearTimeout(toast._t); toast._t = setTimeout(() => t.style.display = "none", 1500);
+}
+function copy(text) {
+  const done = () => toast("복사됨");
+  if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(text).then(done, fallback);
+  else fallback();
+  function fallback() {
+    const a = document.createElement("textarea"); a.value = text; document.body.appendChild(a);
+    a.select(); try { document.execCommand("copy"); done(); } catch (e) { toast("복사 실패"); } a.remove();
+  }
+}
+function speak(text) {
+  if (!("speechSynthesis" in window)) { toast("이 기기는 소리 기능이 없어요"); return; }
+  const u = new SpeechSynthesisUtterance(text); u.lang = "zh-CN"; u.rate = 0.85;
+  speechSynthesis.cancel(); speechSynthesis.speak(u);
+}
+let bigText = "";
+function showBig(ko, zh, read) {
+  bigText = zh; $("#bigKo").textContent = ko; $("#bigZh").textContent = zh; $("#bigRead").textContent = read || "";
+  $("#big").classList.add("show");
+}
+$("#bigClose").onclick = () => $("#big").classList.remove("show");
+$("#bigCopy").onclick = () => copy(bigText);
+$("#bigSpeak").onclick = () => speak(bigText);
+
+function itemEl(p) {
+  const [ko, zh, py, read] = p;
+  const el = document.createElement("div"); el.className = "item";
+  const body = document.createElement("div"); body.className = "body";
+  body.innerHTML = `<div class="ko"></div><div class="zh"></div><div><span class="read"></span><span class="py"></span></div>`;
+  body.querySelector(".ko").textContent = ko;
+  body.querySelector(".zh").textContent = zh;
+  body.querySelector(".read").textContent = read;
+  body.querySelector(".py").textContent = py;
+  body.onclick = () => showBig(ko, zh, read);
+  const st = document.createElement("button"); st.className = "star" + (favs.includes(zh) ? " on" : "");
+  st.textContent = "★"; st.title = "즐겨찾기";
+  st.onclick = () => {
+    favs = favs.includes(zh) ? favs.filter(x => x !== zh) : [...favs, zh];
+    store.set("cj_favs", favs); render();
+  };
+  el.append(body, st);
+  return el;
+}
+
+function renderTabs() {
+  const nav = $("#tabs"); nav.innerHTML = "";
+  TABS.forEach(t => {
+    const b = document.createElement("button"); b.textContent = t; b.className = t === tab ? "on" : "";
+    b.onclick = () => { tab = t; store.set("cj_tab", t); $("#q").value = ""; render(); };
+    nav.append(b);
+  });
+}
+
+function render() {
+  renderTabs();
+  const list = $("#list"); list.innerHTML = "";
+  const q = $("#q").value.trim().toLowerCase();
+  const all = Object.entries(DATA).flatMap(([c, arr]) => arr.map(p => [c, p]));
+  if (q) {
+    const hit = all.filter(([c, p]) => (c + p.join(" ")).toLowerCase().includes(q));
+    if (!hit.length) list.innerHTML = `<div class="empty">찾는 문장이 없어요</div>`;
+    hit.forEach(([c, p]) => list.append(itemEl(p)));
+    return;
+  }
+  if (tab === "★ 즐겨찾기") {
+    const f = all.filter(([c, p]) => favs.includes(p[1]));
+    if (!f.length) list.innerHTML = `<div class="empty">문장 옆 ★ 을 누르면 여기에 모여요<br><br>
+      <span class="tip">문장을 누르면 크게 보여서 상대방에게 화면을 보여 줄 수 있어요.<br>
+      인터넷이 없어도 됩니다. 이 파일만 휴대폰에 있으면 돼요.</span></div>`;
+    f.forEach(([c, p]) => list.append(itemEl(p)));
+    return;
+  }
+  if (tab === "📍 내 주소") { renderAddr(list); return; }
+  if (tab === "🔢 숫자") { renderNum(list); return; }
+  (DATA[tab] || []).forEach(p => list.append(itemEl(p)));
+  if (tab === "긴급") {
+    const b = document.createElement("div"); b.className = "box tip";
+    b.innerHTML = `<span class="sos">중국 긴급 번호</span> 경찰 110 · 구급차 120 · 화재 119`;
+    list.append(b);
+  }
+}
+
+function renderAddr(list) {
+  const addrs = store.get("cj_addr", [{ name: "호텔", zh: "" }, { name: "업체", zh: "" }, { name: "물류 회사", zh: "" }]);
+  const tip = document.createElement("div"); tip.className = "tip"; tip.style.margin = "6px 4px 12px";
+  tip.textContent = "출발 전에 호텔·업체 주소를 중국어로 붙여 넣어 두세요. (업체에 위챗으로 받아 복사) " +
+    "택시 기사님께 [크게 보기]를 보여 주면 됩니다. 이 휴대폰에만 저장돼요.";
+  list.append(tip);
+  addrs.forEach((a, i) => {
+    const box = document.createElement("div"); box.className = "box";
+    box.innerHTML = `<label></label><input class="nm" placeholder="이름 (예: 호텔)"><textarea rows="2" class="ad" style="margin-top:6px" placeholder="중국어 주소 붙여 넣기"></textarea>
+      <div class="row"><button class="btn big">크게 보기</button><button class="btn gray cp">복사</button><button class="btn gray del">지우기</button></div>`;
+    box.querySelector("label").textContent = "주소 " + (i + 1);
+    box.querySelector(".nm").value = a.name; box.querySelector(".ad").value = a.zh;
+    const save = () => { addrs[i] = { name: box.querySelector(".nm").value, zh: box.querySelector(".ad").value }; store.set("cj_addr", addrs); };
+    box.querySelector(".nm").oninput = save; box.querySelector(".ad").oninput = save;
+    box.querySelector(".big").onclick = () => {
+      const zh = box.querySelector(".ad").value.trim();
+      if (!zh) { toast("주소를 먼저 넣어 주세요"); return; }
+      showBig((a.name || "주소") + " — 이 주소로 가 주세요", "请带我去这个地址：\n" + zh, "칭 따이 워 취 저거 디즈");
+    };
+    box.querySelector(".cp").onclick = () => copy(box.querySelector(".ad").value);
+    box.querySelector(".del").onclick = () => { addrs.splice(i, 1); store.set("cj_addr", addrs); render(); };
+    list.append(box);
+  });
+  const add = document.createElement("button"); add.className = "btn"; add.textContent = "+ 주소 추가";
+  add.onclick = () => { addrs.push({ name: "", zh: "" }); store.set("cj_addr", addrs); render(); };
+  list.append(add);
+}
+
+function renderNum(list) {
+  const box = document.createElement("div"); box.className = "box";
+  box.innerHTML = `<label>숫자를 넣으면 중국어로 (가격·수량 말할 때)</label>
+    <input id="numIn" inputmode="decimal" placeholder="예: 3500">
+    <div class="num-out" id="numZh"></div><div class="num-read" id="numKo"></div>
+    <div class="row"><button class="btn" id="numBig">크게 보기</button><button class="btn gray" id="numSpeak">🔊 소리</button></div>`;
+  list.append(box);
+  const upd = () => {
+    const v = $("#numIn").value.replace(/,/g, "").trim();
+    const r = v ? toChinese(v) : null;
+    $("#numZh").textContent = r ? r[0] : (v ? "숫자만 넣어 주세요 (1억 미만)" : "");
+    $("#numKo").textContent = r ? r[1] : "";
+  };
+  $("#numIn").oninput = upd;
+  $("#numBig").onclick = () => { const v = $("#numIn").value.replace(/,/g, ""); const r = toChinese(v);
+    if (r) showBig(v, r[0] + "\n" + v, r[1]); };
+  $("#numSpeak").onclick = () => { const r = toChinese($("#numIn").value.replace(/,/g, "")); if (r) speak(r[0]); };
+  const units = [
+    ["개", "个", "ge", "거"], ["박스", "箱", "xiāng", "샹"], ["위안", "元 / 块", "yuán / kuài", "위안 / 콰이"],
+    ["킬로그램", "公斤", "gōngjīn", "궁진"], ["만", "万", "wàn", "완"], ["천", "千", "qiān", "첸"],
+    ["백", "百", "bǎi", "바이"], ["반", "半", "bàn", "반"],
+  ];
+  const sec = document.createElement("div"); sec.className = "sec"; sec.textContent = "자주 쓰는 단위"; list.append(sec);
+  units.forEach(p => list.append(itemEl(p)));
+  const tip = document.createElement("div"); tip.className = "box tip";
+  tip.textContent = "시장에서는 元(위안) 대신 块(콰이)라고 많이 말해요. 예: 三十块 = 30위안.";
+  list.append(tip);
+}
+
+$("#q").oninput = render;
+render();
+</script>
+</body>
+</html>

@@ -16,17 +16,17 @@ TEXT = "#191919"
 STYLE = f"""
 QWidget#compose {{ background: #dcdce1; font-family: '{FONT}'; }}
 QFrame#ccard {{ background: #fafafa; border-radius: 10px; }}
-QLabel#ctitle {{ font-size: 15px; color: {TEXT}; }}
+QLabel#ctitle {{ font-size: 16px; color: {TEXT}; }}
 QLabel#mine {{ font-size: 13px; color: #6b6b70; }}
 QFrame#opt {{ background: white; border: 1px solid #e6e6e6; border-radius: 8px; }}
 QFrame#opt:hover {{ border-color: {GREEN}; }}
 QFrame#opt[picked="true"] {{ border: 2px solid {GREEN}; background: #f3fbf6; }}
-QLabel#chip {{ font-size: 12px; color: white; background: {GREEN}; border-radius: 9px; padding: 1px 8px; }}
-QLabel#chipalt {{ font-size: 12px; color: #4a4a4f; background: #ececec; border-radius: 9px; padding: 1px 8px; }}
-QLabel#zh {{ font-size: 17px; color: {TEXT}; }}
-QLabel#ko {{ font-size: 13px; color: #7a7a7a; }}
-QLabel#copied {{ font-size: 12px; color: {GREEN}; }}
-QLabel#note {{ font-size: 13px; color: #b36b00; }}
+QLabel#chip {{ font-size: 13px; color: white; background: {GREEN}; border-radius: 9px; padding: 1px 8px; }}
+QLabel#chipalt {{ font-size: 13px; color: #4a4a4f; background: #ececec; border-radius: 9px; padding: 1px 8px; }}
+QLabel#zh {{ font-size: 20px; color: {TEXT}; }}
+QLabel#ko {{ font-size: 14px; color: #7a7a7a; }}
+QLabel#copied {{ font-size: 13px; color: {GREEN}; }}
+QLabel#note {{ font-size: 14px; color: #b36b00; }}
 QFrame#notebox {{ background: #fff8ec; border-radius: 8px; }}
 QPushButton#flat {{ border: none; background: transparent; color: #4a4a4f; font-size: 13px; padding: 2px 6px; }}
 QPushButton#flat:hover {{ background: rgba(0,0,0,0.06); border-radius: 4px; }}
@@ -42,8 +42,8 @@ class _Option(QFrame):
         self.setCursor(Qt.PointingHandCursor)
         self.opt = opt
         v = QVBoxLayout(self)
-        v.setContentsMargins(14, 10, 14, 10)
-        v.setSpacing(6)
+        v.setContentsMargins(16, 14, 16, 14)
+        v.setSpacing(8)
         top = QHBoxLayout()
         chip = QLabel(opt.get("label", ""))
         chip.setObjectName("chip" if best else "chipalt")
@@ -105,7 +105,7 @@ class ComposeWindow(QWidget):
         card.setObjectName("ccard")
         self.body = QVBoxLayout(card)
         self.body.setContentsMargins(16, 14, 16, 14)
-        self.body.setSpacing(10)
+        self.body.setSpacing(14)
         root.addWidget(card, 1)
         self._widgets: list = []
 

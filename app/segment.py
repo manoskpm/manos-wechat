@@ -160,7 +160,14 @@ def segment_chat(img, lines: list[Line], chat_left: float, chat_right: float, to
         ax0, ax1, ay0, ay1 = x0 + cx0, x0 + cx1, top + by0, top + by1
         inside = [l for l in lines if ax0 - 4 <= (l.x0 + l.x1) / 2 <= ax1 + 4 and ay0 - 4 <= (l.y0 + l.y1) / 2 <= ay1 + 4]
         inside.sort(key=lambda l: (round(l.y0 / 6), l.x0))
-        text = "".join(l.text for l in inside).strip()
+        # 줄이 나뉜 글(송장 목록 등)은 줄바꿈을 살림
+        rows: list = []
+        for l in inside:
+            if rows and abs(l.y0 - rows[-1][0]) < max(6, (l.y1 - l.y0) * 0.5):
+                rows[-1][1].append(l.text)
+            else:
+                rows.append([l.y0, [l.text]])
+        text = "\n".join("".join(r[1]) for r in rows).strip()
         pix = arr[ay0:ay1, ax0:ax1].reshape(-1, 3)
         colors, counts = np.unique(pix // 4 * 4, axis=0, return_counts=True)
         mode = tuple(int(v) for v in colors[counts.argmax()])

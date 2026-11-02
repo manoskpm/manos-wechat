@@ -720,9 +720,9 @@ class Panel(QWidget):
         offset = self.mirror.mapTo(self, QPoint(0, 0)).y()
         cl = res.chat_left or 0
         cr = res.chat_right or max([it.x1 for it in res.items] + [cl + 400])
-        # 글자 크기: 위챗 말풍선 글자 줄 높이로 계산 (위챗과 같은 크기로 보이게)
+        # 글자 크기: 위챗 말풍선 글자 줄 높이로 계산 (맑은 고딕이 같은 크기에서 더 커 보여서 0.76배)
         hs = sorted(it.extra["line_h"] for it in res.items if it.kind == "text" and "line_h" in it.extra)
-        base = max(11, min(24, round(hs[len(hs) // 2] / dpr * 0.93))) if hs else 14
+        base = max(11, min(24, round(hs[len(hs) // 2] / dpr * 0.76))) if hs else 14
         views = []
         for it in res.items:
             v = {"kind": it.kind, "side": it.side, "y": it.y0 / dpr - offset, "h": (it.y1 - it.y0) / dpr,

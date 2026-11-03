@@ -25,7 +25,7 @@ from .chat_parser import CJK_RE, is_chinese_text, memory_key, normalize, similar
 from .segment import DURATION_RE, MONEY_RE, RECALL_RE, ko_time
 from .prompts import TONES
 from .screen_reader import ScreenReader, same_title
-from .translator import TranslateError, Translator, build_request, read_title
+from .translator import TranslateError, Translator, build_request, partial_options, read_title
 from .version import VERSION
 
 FRAME = "#dcdce1"     # 위챗 바깥 회색 테두리
@@ -608,6 +608,8 @@ class Panel(QWidget):
         self._last_pick = ""
         self.memory = C.load_memory()   # 한 번 번역한 글은 기억해서 AI 없이 바로 씀
         self._out_entry_id = None
+        self._out_done = True
+        self._user_picked = False
 
     # 회색 줄을 끌어서 이동 (옆에 붙기를 끈 경우)
     def mousePressEvent(self, e):
@@ -1045,7 +1047,25 @@ class Panel(QWidget):
         def work():
             try:
                 t0 = time.perf_counter()
-                data = self.translator.run(req)
+                if direction == "out":
+                    # 보낼 문장 후보는 AI가 쓰는 대로 완성된 것부터 바로 보여 줌
+                    seen = [0]
+
+                    def on_text(acc):
+                        opts = partial_options(acc)
+                        if len(opts) > seen[0]:
+                            seen[0] = len(opts)
+                            self.q.put(("partial_out", text, opts))
+                            if len(opts) == 1:
+                                self._write_log(f"첫 후보 {time.perf_counter() - t0:.1f}초")
+                    try:
+                        data = self.translator.run(req, on_text=on_text)
+                    except TranslateError:
+                        raise
+                    except Exception:   # 흘려 받기가 안 되는 환경이면 한 번에 받기
+                        data = self.translator.run(req)
+                else:
+                    data = self.translator.run(req)
                 self._write_log(f"번역 {direction} {time.perf_counter() - t0:.1f}초 ({len(text)}자)")
                 self.q.put(("done", direction, vendor, entry_id, text, data))
             except TranslateError as e:
@@ -1110,11 +1130,18 @@ class Panel(QWidget):
                 C.save_memory(self.memory)
             self._show_compose()
             shown = text.split(self.APPLY_TAG)[0] + ("  (+ 제안 반영)" if self.APPLY_TAG in text else "")
+            self._out_done = True
             self.compose.show_options(shown, options, data.get("note", ""))
-            # 추천 문장은 바로 복사해 둠 (다른 후보를 누르면 그걸로 바뀜)
-            self.compose.mark_first()
-            self._last_pick = first["chinese"]
-            self._copy(first["chinese"])
+            if getattr(self, "_user_picked", False) and self._last_pick:
+                # 후보가 다 나오기 전에 대표가 이미 고른 문장은 그대로 둠
+                self.compose.mark_text(self._last_pick)
+                entry["zh"] = self._last_pick
+            else:
+                # 추천 문장은 바로 복사해 둠 (다른 후보를 누르면 그걸로 바뀜)
+                self.compose.mark_first()
+                if self._last_pick != first["chinese"]:
+                    self._copy(first["chinese"])
+                self._last_pick = first["chinese"]
         self._store(vendor, hist)
 
     def _handle_error(self, msg, vendor, entry_id):
@@ -1137,6 +1164,8 @@ class Panel(QWidget):
         self.input.clear()
         self.copy_lbl.setText("")
         self._last_send = text
+        self._out_done = False
+        self._user_picked = False
         tone = self.cfg.get("tone", "polite")
         self._last_tone = tone
         self._show_compose()
@@ -1171,8 +1200,24 @@ class Panel(QWidget):
                 best, best_r = (mine, v), r
         return best
 
+    def _handle_partial_out(self, text: str, options: list):
+        """후보가 하나씩 완성될 때마다 바로 보여 주고, 첫 후보(추천)는 바로 복사."""
+        if text != self._last_send or self._out_done:
+            return
+        shown = text.split(self.APPLY_TAG)[0] + ("  (+ 제안 반영)" if self.APPLY_TAG in text else "")
+        self.compose.show_options(shown, options, "")
+        if not self._user_picked:
+            self.compose.mark_first()
+            if self._last_pick != options[0]["chinese"]:
+                self._last_pick = options[0]["chinese"]
+                self._copy(options[0]["chinese"])
+        else:
+            self.compose.mark_text(self._last_pick)
+
     def _retry_send(self):
         if self._last_send:
+            self._out_done = False
+            self._user_picked = False
             self.compose.show_waiting(self._last_send)
             self._translate_async("out", self._last_send, tone=self.cfg.get("tone", "polite"))
 
@@ -1185,6 +1230,8 @@ class Panel(QWidget):
             return
         text = base + self.APPLY_TAG + note
         self._last_send = text
+        self._out_done = False
+        self._user_picked = False
         tone = self.cfg.get("tone", "polite")
         self._last_tone = tone
         m = self.memory["out"].get(tone + "|" + text)
@@ -1197,6 +1244,7 @@ class Panel(QWidget):
     def _pick_option(self, chinese: str, opt: dict):
         """작성 도우미 창에서 후보를 고름 → 복사, 기록도 실제로 보낼 문장으로 바꿈."""
         self._last_pick = chinese
+        self._user_picked = True
         self._copy(chinese)
         e = next((h for h in self.history if h.get("id") == self._out_entry_id), None)
         if e is None and self._last_send:   # 저장소에서 고른 문장도 대화 기록에 남김
@@ -1338,6 +1386,8 @@ class Panel(QWidget):
                     self._handle_scan(item[1])
                 elif kind == "shift":
                     self._handle_shift(item[1])
+                elif kind == "partial_out":
+                    self._handle_partial_out(item[1], item[2])
                 elif kind == "done":
                     self._handle_done(*item[1:])
                     self._status = ""

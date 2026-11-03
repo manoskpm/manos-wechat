@@ -26,3 +26,15 @@ def test_run_parses_json():
                            content=[SimpleNamespace(type="text", text=json.dumps(payload))])
     t.client = SimpleNamespace(beta=SimpleNamespace(messages=SimpleNamespace(create=lambda **k: resp)))
     assert t.run({}) == payload
+
+
+def test_partial_options_from_unfinished_answer():
+    """AI가 아직 쓰는 중인 답에서도 완성된 후보만 꺼냄."""
+    from app.translator import partial_options
+    full = ('{"options": [{"label": "정중하게(추천)", "chinese": "老板您好", "back_translation": "사장님 안녕하세요"}, '
+            '{"label": "짧게", "chinese": "老板好", "back_translation": "사장님"}], "note": ""}')
+    assert partial_options(full[:20]) == []
+    cut = full.index("}, ") + 1
+    assert [o["chinese"] for o in partial_options(full[:cut])] == ["老板您好"]
+    assert [o["chinese"] for o in partial_options(full[:cut + 30])] == ["老板您好"]
+    assert [o["chinese"] for o in partial_options(full)] == ["老板您好", "老板好"]

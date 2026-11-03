@@ -77,13 +77,43 @@ def _fast_thinking(cfg: dict) -> dict:
     return {}
 
 
+def partial_options(text: str) -> list:
+    """AI가 아직 쓰는 중인 답에서 완성된 후보만 꺼냄 (첫 후보를 기다리지 않고 바로 보여 주기 위해)."""
+    i = text.find('"options"')
+    j = text.find("[", i) if i >= 0 else -1
+    if j < 0:
+        return []
+    dec, out, k = json.JSONDecoder(), [], j + 1
+    while True:
+        while k < len(text) and text[k] in " \n\r\t,":
+            k += 1
+        if k >= len(text) or text[k] != "{":
+            break
+        try:
+            obj, k = dec.raw_decode(text, k)
+        except ValueError:
+            break
+        if isinstance(obj, dict) and obj.get("chinese"):
+            out.append(obj)
+    return out
+
+
 class Translator:
     def __init__(self, api_key: str):
         self.client = anthropic.Anthropic(api_key=api_key, timeout=60.0, max_retries=2)
 
-    def run(self, request: dict) -> dict:
+    def run(self, request: dict, on_text=None) -> dict:
+        """번역 요청. on_text 를 주면 AI가 쓰는 대로 지금까지의 글을 계속 알려 줌 (흘려 받기)."""
         try:
-            resp = self.client.beta.messages.create(**request)
+            if on_text is None:
+                resp = self.client.beta.messages.create(**request)
+            else:
+                acc = ""
+                with self.client.beta.messages.stream(**request) as stream:
+                    for chunk in stream.text_stream:
+                        acc += chunk
+                        on_text(acc)
+                    resp = stream.get_final_message()
         except anthropic.AuthenticationError as e:
             raise TranslateError("API 키가 올바르지 않습니다. 설정에서 키를 확인해 주세요.") from e
         except anthropic.PermissionDeniedError as e:

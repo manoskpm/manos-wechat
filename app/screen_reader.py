@@ -708,7 +708,20 @@ class ScreenReader:
     def stop(self):
         self._stop.set()
 
+    def warm_up(self):
+        """글자 인식 프로그램을 켜자마자 미리 불러 두고 한 번 돌려 둠 (첫 대화방이 늦게 뜨지 않게)."""
+        try:
+            t0 = time.perf_counter()
+            from PIL import Image, ImageDraw
+            img = Image.new("RGB", (240, 60), (250, 250, 250))
+            ImageDraw.Draw(img).rectangle([20, 20, 200, 40], fill=(30, 30, 30))
+            self._get_ocr()(np.array(img), use_cls=False)
+            self._log(f"글자 인식 준비 {time.perf_counter() - t0:.1f}초")
+        except Exception as e:
+            self._log(f"글자 인식 준비 실패: {e}")
+
     def _loop(self):
+        self.warm_up()
         while not self._stop.is_set():
             try:
                 self._tick()

@@ -230,6 +230,12 @@ class ComposeWindow(QWidget):
         holder.setLayout(row)
         self._add(holder)
 
+    def mark_text(self, chinese: str):
+        """이미 고른 문장에 '복사됨' 표시 (후보를 다시 그려도 고른 표시 유지)."""
+        for o in self._widgets:
+            if isinstance(o, _Option):
+                o.set_picked(o.opt.get("chinese") == chinese)
+
     def mark_first(self):
         """추천(첫 번째) 문장은 미리 복사해 두었다는 표시 (창은 닫지 않음)."""
         first = next((o for o in self._widgets if isinstance(o, _Option)), None)

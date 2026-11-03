@@ -215,3 +215,32 @@ def test_intent_only_when_asked(panel):
     _scan(p, "工厂辛", [201] * 1920, [("in", "有点难度")])          # 다른 방에서 같은 글
     e2 = p.history[-1]
     assert e2["ko"] == "한:有点难度" and e2.get("nuance") == "속:有点难度" and len(calls) == 2
+
+
+def test_first_candidate_shows_before_all_done(panel):
+    """보낼 문장: 첫 후보가 완성되면 다른 후보를 기다리지 않고 바로 보여 주고 복사."""
+    import json
+    p = panel
+    from PySide6.QtGui import QGuiApplication
+    from app.compose import _Option
+    seen = []
+
+    class StreamTr:
+        def run(self, req, on_text=None):
+            data = {"options": [{"label": "정중하게(추천)", "chinese": "中:첫", "back_translation": "역:첫"},
+                                {"label": "짧게", "chinese": "中:둘", "back_translation": "역:둘"}], "note": ""}
+            full = json.dumps(data, ensure_ascii=False)
+            if on_text:
+                cut = full.index("}, ") + 1
+                on_text(full[:cut])
+                p._drain_queue()      # 이 순간 화면 확인
+                seen.append(([w.opt["chinese"] for w in p.compose._widgets if isinstance(w, _Option)],
+                             QGuiApplication.clipboard().text()))
+                on_text(full)
+            return data
+    p.translator = StreamTr()
+    p.input.setPlainText("샘플 보내 주세요")
+    p._send()
+    p._drain_queue()
+    assert seen == [(["中:첫"], "中:첫")]                        # 첫 후보만 먼저, 이미 복사됨
+    assert [w.opt["chinese"] for w in p.compose._widgets if isinstance(w, _Option)] == ["中:첫", "中:둘"]

@@ -6,3 +6,11 @@ dist/
 *.spec
 tests/fixtures/real_*.png
 log.txt
+
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+*.apk
+*.keystore
+*.jks

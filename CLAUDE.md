@@ -68,8 +68,11 @@
   `app/screen_reader.py` 화면 읽기(배율 자동 맞춤, 대화 영역만 글자 인식, 스크롤 따라가기),
   `app/segment.py` 말풍선·사진·시간 줄 나누기, `app/translator.py`·`app/prompts.py` Claude API,
   `app/updater.py` 자동 업데이트, `app/win_window.py` 창 위치(윈도우 전용), `app/config.py` 설정·기록·번역 저장소.
-- 데이터: `%APPDATA%\ManosWeChatTranslator` (config.json, history\, memory.json, instructions.txt, log.txt).
+- 데이터: `%APPDATA%\ManosWeChatTranslator` (config.json, history\, memory.json, rooms\ 대화방별 화면 저장, instructions.txt, log.txt).
 - 시험: `python -m pytest -q` (Qt 는 `QT_QPA_PLATFORM=offscreen`). 화면 배율 100·125·150·200% 시험 포함.
-- 배포: GitHub Actions `build-windows.yml`(수동 실행) → PyInstaller 실행 파일 + Inno Setup 설치 파일 → 릴리스 `v{번호}`.
+- 배포: GitHub Actions `build-windows.yml`(수동 실행) → PyInstaller **폴더 방식**(빨리 켜짐, ManosTranslator.zip) + Inno Setup 설치 파일 → 릴리스 `v{번호}`.
+  예전 한 덩어리 버전용 ManosTranslator.exe 도 한동안 같이 올림 (그 버전이 받으면 폴더 방식으로 자동 전환).
+- **일하는 순서 (대표 지시)**: 대표가 문제를 말하면 원인·방법·효과만 보고 → "만들어"라고 하면 그때 작업. 먼저 만들지 않는다.
+- **코드 비공개 (대표 결정, 다음 작업)**: 사무실 서버 컴퓨터로 옮기는 것을 검토 중.
   설치 파일 주소: https://github.com/manoskpm/manos-wechat/releases/latest/download/ManosTranslator-Setup.exe
 - 작업 브랜치: `claude/hopeful-archimedes-a43atn`.

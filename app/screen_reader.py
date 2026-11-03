@@ -427,6 +427,30 @@ def new_region(prev, dy: int):
     return y0, y1
 
 
+def base64_decode(s: str) -> bytes:
+    import base64
+    try:
+        return base64.b64decode(s or "")
+    except ValueError:
+        return b""
+
+
+def fast_title_sig(img, hdr) -> list:
+    """대화방 구분용 제목 지문 (글자 인식 없이, 지난번 화면 배치를 그대로 써서 빠르게)."""
+    cl, cr, th = int(hdr["chat_left"]), int(hdr.get("chat_right") or img.width), int(hdr["title_h"])
+    band_top = measure_frame(img, cl)[0]
+    return title_signature(img.crop((cl, band_top + 2, cr, max(band_top + 4, th - 2))))
+
+
+def _hdr(res) -> dict:
+    return {k: getattr(res, k) for k in ("chat_left", "chat_right", "title_h", "chat_top", "chat_bottom", "win_h")}
+
+
+def _geom(img, hdr) -> tuple:
+    return (img.height, int(hdr["chat_left"]), int(hdr.get("chat_right") or 0), int(hdr["chat_top"]),
+            int(hdr["chat_bottom"]))
+
+
 class ScreenReader:
     def __init__(self, cfg: dict, on_scan, own_hwnd_getter, log_path=None, on_shift=None):
         """on_scan(ScanResult) 는 화면이 바뀌고 안정되었을 때 호출됨 (별도 스레드).
@@ -438,6 +462,8 @@ class ScreenReader:
         self._ref_profile = None   # 번역 칸이 맞춰져 있는 화면의 줄별 밝기
         self._last_profile = None
         self._last_res = None      # 마지막으로 읽은 결과 (스크롤하면 새로 보이는 부분만 읽기 위해)
+        self._store = None         # 대화방별 대화 저장소 (켜고 처음 쓸 때 불러옴)
+        self._room = None          # 지금 보고 있는 대화방
         self._shift_acc = 0        # 마지막으로 읽은 뒤 스크롤한 거리
         self._moving_until = 0.0   # 이 시각까지는 스크롤 중으로 봄
         self._last_dy = 0
@@ -496,6 +522,8 @@ class ScreenReader:
             self._ref_profile = prof
             self._shift_acc += dy
             self._last_dy = dy
+            if self._room is not None:
+                self._room.shift += dy
             self.on_shift(dy)
             self._moving_until = time.time() + 0.35
             return True
@@ -661,6 +689,86 @@ class ScreenReader:
         img.save(path)
         return True
 
+    def _store_get(self):
+        if self._store is None:
+            from .room_store import RoomStore
+            self._store = RoomStore()
+        return self._store
+
+    def _restore_from_store(self, img):
+        """대화방을 다시 열었거나 번역기를 다시 켰을 때: 저장된 대화로 화면을 바로 만듦.
+        (대화방, 결과, 아직 안 읽은 구간 또는 None)"""
+        try:
+            store = self._store_get()
+            hdrs = [_hdr(self._last_res)] if self._last_res is not None else []
+            hdrs += [r.header for r in reversed(store.rooms[-5:]) if r.header.get("title_h")]
+            for hdr in hdrs[:3]:
+                if int(hdr.get("win_h") or 0) != img.height:
+                    continue
+                room = store.find(fast_title_sig(img, hdr), same_title)
+                if room is None or room.profile is None or tuple(room.geom) != _geom(img, hdr):
+                    continue
+                h = room.header
+                box = (h["chat_left"] + 4, h["chat_top"] + 2, (h.get("chat_right") or img.width) - 22,
+                       h["chat_bottom"] - 2)
+                prof = chat_profile(img, box)
+                if prof is None or prof.shape != room.profile.shape:
+                    continue
+                dy = 0 if _shift_err(room.profile, prof, 0) <= 2.0 else estimate_shift(room.profile, prof)
+                if dy is None:
+                    continue
+                room.shift = room.profile_shift + dy
+                r = ScanResult(h.get("vendor", ""), h.get("title_sig") or [], [], h["chat_left"], h["title_h"],
+                               h.get("title_text", ""), base64_decode(h.get("title_png", "")),
+                               band_h=h.get("band_h", 0), chat_top=h["chat_top"], chat_bottom=h["chat_bottom"],
+                               win_h=h["win_h"], frame_rgb=tuple(h.get("frame_rgb") or ()),
+                               chat_bg=tuple(h.get("chat_bg") or ()), chat_right=h.get("chat_right") or 0)
+                r.items = room.view(r.chat_top, r.chat_bottom)
+                r.timing = {"stored": True}
+                self._room = room
+                # 아직 안 읽은 구간 (새 메시지 등) → 그 부분만 읽음
+                top, bottom = r.chat_top + 6, r.chat_bottom - 6
+                gaps, y = [], top
+                for a, b in sorted(room.covered):
+                    a, b = a + room.shift, b + room.shift
+                    if b <= y or a >= bottom:
+                        continue
+                    if a > y:
+                        gaps.append((y, a))
+                    y = max(y, b)
+                if y < bottom:
+                    gaps.append((y, bottom))
+                gaps = [g for g in gaps if g[1] - g[0] > 8]
+                if not gaps:
+                    return room, r, None
+                lo, hi = gaps[0][0], gaps[-1][1]
+                if hi - lo > (bottom - top) * 0.6:
+                    return room, r, (r.chat_top, r.chat_bottom)   # 많이 바뀌었으면 화면 전체를 다시 읽음
+                return room, r, (lo, hi)
+        except Exception as e:
+            self._log(f"저장된 대화 불러오기 실패: {e}")
+        return None
+
+    def _room_update(self, img, res, known: bool):
+        """읽은 화면을 대화방 저장소에 합침."""
+        try:
+            store = self._store_get()
+            hdr = _hdr(res)
+            sig = fast_title_sig(img, hdr)
+            room = store.get(sig, _geom(img, hdr), same_title)
+            if room is not self._room or not known:
+                if room.items and not room.align(res):
+                    room.__init__(sig, _geom(img, hdr))   # 어디쯤인지 모르면 그 방 화면 정보는 새로 시작
+            room.merge(res)
+            box = (hdr["chat_left"] + 4, hdr["chat_top"] + 2, (hdr.get("chat_right") or img.width) - 22,
+                   hdr["chat_bottom"] - 2)
+            room.profile = chat_profile(img, box)
+            room.profile_shift = room.shift
+            self._room = room
+            store.save()
+        except Exception as e:
+            self._log(f"대화 저장 실패: {e}")
+
     @staticmethod
     def _exact_key(img) -> bytes:
         """같은 화면인지 확인용 (거의 그대로일 때만 같음)."""
@@ -707,6 +815,8 @@ class ScreenReader:
 
     def stop(self):
         self._stop.set()
+        if self._store is not None:
+            self._store.save(force=True)
 
     def warm_up(self):
         """글자 인식 프로그램을 켜자마자 미리 불러 두고 한 번 돌려 둠 (첫 대화방이 늦게 뜨지 않게)."""
@@ -763,6 +873,8 @@ class ScreenReader:
             if dy:
                 self._ref_profile = prof
                 self._shift_acc += dy
+                if self._room is not None:
+                    self._room.shift += dy
                 self.on_shift(dy)
                 self._moving_until = time.time() + 0.4
                 return   # 아직 움직이는 중 → 멈춘 뒤에 새로 보인 부분을 읽음
@@ -784,18 +896,42 @@ class ScreenReader:
         key = self._exact_key(img)
         cached = next((r for k, r in self._scan_cache if k == key), None)
         if cached is not None:
+            self._last_res, self._shift_acc = cached, 0
             self._remember_box(img, cached)
+            self._room_update(img, cached, known=False)
             self.on_scan(cached)
             return
         self.status = "읽는 중..."
+        res = None
+        known = False   # 대화방 안에서의 위치를 이미 알고 있는지 (스크롤로 이어 온 경우)
         roi = prev = None
         if self._last_res is not None and self._shift_acc and self._chat_box and img.height == self._chat_box[4]:
             prev = shift_result(self._last_res, self._shift_acc)
             roi = new_region(prev, self._shift_acc)
-        res = self.scan_image(img, roi=roi, prev=prev)
+            known = True
+            room = self._room
+            if roi is not None and room is not None and room.covers(*roi):
+                # 전에 읽어 둔 부분 → 글자 인식 없이 저장된 대화로 바로 채움
+                import copy
+                res = copy.copy(prev)
+                keep = [it for it in prev.items if it.y1 <= roi[0] or it.y0 >= roi[1]]
+                fill = [it for it in room.view(roi[0], roi[1]) if it.y0 >= roi[0] and it.y1 <= roi[1]]
+                res.items = sorted(keep + fill, key=lambda it: it.y0)
+                res.timing = {"stored": True}
+        if res is None and prev is None:
+            restored = self._restore_from_store(img)
+            if restored is not None:
+                room, r, roi = restored
+                self.on_scan(r)          # 저장된 대화로 즉시 표시
+                prev, known = r, True
+                if roi is None:
+                    res = r
+        if res is None:
+            res = self.scan_image(img, roi=roi, prev=prev)
         self._last_res, self._shift_acc = res, 0
         self._scan_cache = (self._scan_cache + [(key, res)])[-30:]
         self._remember_box(img, res)
+        self._room_update(img, res, known=known)
         self.status = "자동 읽기 중"
         self._log(f"scan vendor={res.vendor!r} 배율={res.timing.get('scale')} 글자읽기={res.timing.get('read')}초 "
                   f"전체={res.timing.get('total')}초 덩어리={[(i.kind, i.side) for i in res.items]}")

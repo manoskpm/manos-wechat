@@ -25,7 +25,7 @@ UninstallDisplayIcon={app}\ManosTranslator.exe
 SetupIconFile=..\assets\icon.ico
 
 [Files]
-Source: "..\dist\ManosTranslator.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\dist\ManosTranslator\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{userdesktop}\위챗+번역기"; Filename: "{app}\ManosTranslator.exe"; Parameters: "--with-wechat"; IconFilename: "{app}\ManosTranslator.exe"

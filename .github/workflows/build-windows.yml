@@ -35,9 +35,23 @@ jobs:
         shell: bash
         run: echo 'VERSION = "${{ github.run_number }}"' > app/version.py
 
-      - name: Build exe
+      # 폴더 방식 (설치용·자동 업데이트용): 켤 때 풀어 놓는 과정이 없어서 빨리 켜짐
+      - name: Build app folder
+        run: >
+          pyinstaller --noconfirm --onedir --windowed --name ManosTranslator
+          --collect-all rapidocr_onnxruntime --collect-binaries onnxruntime
+          --icon assets/icon.ico --add-data "assets/icon.ico;assets" --exclude-module tkinter
+          run.py
+
+      - name: Zip app folder
+        shell: pwsh
+        run: Compress-Archive -Path dist\ManosTranslator\* -DestinationPath dist\ManosTranslator.zip -Force
+
+      # 예전 버전(한 덩어리 파일)이 새 버전으로 넘어올 수 있게 한동안 같이 올림
+      - name: Build single exe (for old versions)
         run: >
           pyinstaller --noconfirm --onefile --windowed --name ManosTranslator
+          --distpath dist_onefile --workpath build_onefile
           --collect-all rapidocr_onnxruntime --collect-binaries onnxruntime
           --icon assets/icon.ico --add-data "assets/icon.ico;assets" --exclude-module tkinter
           run.py
@@ -56,7 +70,7 @@ jobs:
         with:
           name: ManosTranslator-windows
           path: |
-            dist/ManosTranslator.exe
+            dist/ManosTranslator.zip
             dist/ManosTranslator-Setup.exe
           retention-days: 14
 
@@ -67,5 +81,6 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           git log -1 --format=%B > notes.txt
-          gh release create "v${{ github.run_number }}" dist/ManosTranslator.exe dist/ManosTranslator-Setup.exe \
+          gh release create "v${{ github.run_number }}" dist/ManosTranslator.zip dist_onefile/ManosTranslator.exe \
+            dist/ManosTranslator-Setup.exe \
             --target "${{ github.sha }}" --title "발주 번역기 v${{ github.run_number }}" --notes-file notes.txt

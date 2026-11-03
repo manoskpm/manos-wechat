@@ -1332,7 +1332,7 @@ class Panel(QWidget):
 
         def work():
             try:
-                path = updater.download(info["url"], version=info["version"],
+                path = updater.download(info["url"], version=info["version"], kind=info.get("kind", "exe"),
                                         progress=lambda p: self.q.put(("update_progress", p)))
                 self.q.put(("update_ready", path, info["version"]))
             except Exception as e:

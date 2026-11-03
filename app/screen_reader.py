@@ -247,6 +247,9 @@ def detect_chat_right_by_color(img, chat_left: float) -> float | None:
     for i in range(len(modes) - 6):
         if all(abs(m[0] - bg) > 2 and m[1] >= 0.85 for m in modes[i:i + 6]):
             return float(start + i)
+        # 위챗 4.2: 모멘트 창이 오른쪽에 붙으면 사이에 얇은(3~5픽셀) 진한 경계선만 있음
+        if all(abs(m[0] - bg) > 25 and m[1] >= 0.97 for m in modes[i:i + 3]):
+            return float(start + i)
     return None
 
 

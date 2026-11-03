@@ -66,6 +66,8 @@ EXPECTED = {
     "narrow": "text/in photo/out",
     "u33": "text/in photo/out text/in text/out text/out text/in text/out link/in notice/in",
     "u34": "text/in text/in photo/in photo/in photo/in",
+    # 모멘트 창이 오른쪽에 붙어 열린 화면 (그 부분은 읽지 않아야 함)
+    "u39": "link/in time/center text/out time/center text/in photo/in time/center text/out text/out",
 }
 
 

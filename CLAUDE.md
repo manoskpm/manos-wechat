@@ -75,6 +75,12 @@
 - 시험: `python -m pytest -q` (Qt 는 `QT_QPA_PLATFORM=offscreen`). 화면 배율 100·125·150·200% 시험 포함.
 - 배포: GitHub Actions `build-windows.yml`(수동 실행) → PyInstaller **폴더 방식**(빨리 켜짐, ManosTranslator.zip) + Inno Setup 설치 파일 → 릴리스 `v{번호}`.
   예전 한 덩어리 버전용 ManosTranslator.exe 도 한동안 같이 올림 (그 버전이 받으면 폴더 방식으로 자동 전환).
+- **안드로이드 앱 (대표 지시로 제작, 첫 버전 `android-1`)**: `android/` (Kotlin, 화면은 코드로만 그림, 외부 라이브러리 없음).
+  초록 "번" 버튼(위에 떠 있음) → 복사한 글 번역 시트, 길게 누르면 답장 시트(후보 3개). 숫자 칸, 번역 저장소, 속뜻은 누를 때만.
+  업체 선택·기록·상품 번역은 없음(상품은 구글 번역 사용). 빌드: `build-android.yml`(수동) → **prerelease** `android-{번호}`
+  (일반 릴리스로 올리면 PC 자동 업데이트(releases/latest)가 깨지므로 반드시 prerelease).
+  서명 열쇠는 공개 저장소에 올리지 않음(`*.keystore` 무시) → 지금은 빌드마다 서명이 달라 업데이트는 지우고 다시 설치.
+  비공개 전환 후 서명 열쇠를 GitHub 비밀값으로 넣어 고정할 것. 실제 폰 시험 전이라 위챗 위 버튼·복사 읽기는 확인 안 됨.
 - **일하는 순서 (대표 지시)**: 대표가 문제를 말하면 원인·방법·효과만 보고 → "만들어"라고 하면 그때 작업. 먼저 만들지 않는다.
 - **코드 비공개 (대표 결정, 다음 작업)**: 사무실 서버 컴퓨터로 옮기는 것을 검토 중.
   설치 파일 주소: https://github.com/manoskpm/manos-wechat/releases/latest/download/ManosTranslator-Setup.exe

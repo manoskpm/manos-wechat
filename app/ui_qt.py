@@ -646,6 +646,9 @@ class Panel(QWidget):
         auto = QAction("자동 읽기", m, checkable=True, checked=self.cfg.get("auto_read", True))
         auto.toggled.connect(lambda v: self._save_toggle("auto_read", v))
         m.addAction(auto)
+        fast = QAction("빠른 번역 (받은 업체 글)", m, checkable=True, checked=self.cfg.get("fast_incoming", True))
+        fast.toggled.connect(lambda v: self._save_toggle("fast_incoming", v))
+        m.addAction(fast)
         dock = QAction("위챗 옆에 붙기", m, checkable=True, checked=self.cfg.get("dock", True))
         dock.toggled.connect(lambda v: self._save_toggle("dock", v))
         m.addAction(dock)
@@ -1065,8 +1068,19 @@ class Panel(QWidget):
                     except Exception:   # 흘려 받기가 안 되는 환경이면 한 번에 받기
                         data = self.translator.run(req)
                 else:
-                    data = self.translator.run(req)
-                self._write_log(f"번역 {direction} {time.perf_counter() - t0:.1f}초 ({len(text)}자)")
+                    try:
+                        data = self.translator.run(req)
+                    except TranslateError as e:
+                        if req.get("model") != self.cfg.get("fast_model", "claude-haiku-5-5"):
+                            raise
+                        # 빠른 AI 가 안 되면 기본 AI 로 한 번 더 (번역이 빠지지 않게)
+                        self._write_log(f"빠른 번역 실패 → 기본 AI 로: {e}")
+                        req2 = build_request(cfg=dict(self.cfg, fast_incoming=False),
+                                             user_instructions=C.load_user_instructions(), vendor=vendor,
+                                             history=history, direction=direction, text=text, tone=tone)
+                        data = self.translator.run(req2)
+                self._write_log(f"번역 {direction} {time.perf_counter() - t0:.1f}초 ({len(text)}자, "
+                                f"{req.get('model')})")
                 self.q.put(("done", direction, vendor, entry_id, text, data))
             except TranslateError as e:
                 self.q.put(("error", str(e), vendor, entry_id))

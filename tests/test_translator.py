@@ -38,3 +38,20 @@ def test_partial_options_from_unfinished_answer():
     assert [o["chinese"] for o in partial_options(full[:cut])] == ["老板您好"]
     assert [o["chinese"] for o in partial_options(full[:cut + 30])] == ["老板您好"]
     assert [o["chinese"] for o in partial_options(full)] == ["老板您好", "老板好"]
+
+
+def test_incoming_uses_fast_model_and_short_history():
+    """받은 업체 글 번역은 빠른 AI(생각 단계 없이), 이전 대화는 최근 6줄만. 끄면 기본 AI."""
+    hist = [{"side": "in", "zh": f"消息{i}", "ko": f"메시지{i}"} for i in range(12)]
+    req = build_request(cfg=DEFAULTS, user_instructions="", vendor="老王", history=hist,
+                        direction="in", text="好的")
+    assert req["model"] == "claude-haiku-5-5" and req["thinking"] == {"type": "disabled"}
+    assert "fallbacks" not in req and req["output_config"]["format"]["type"] == "json_schema"
+    content = req["messages"][0]["content"]
+    assert "消息11" in content and "消息5" not in content
+    slow = build_request(cfg=dict(DEFAULTS, fast_incoming=False), user_instructions="", vendor="老王",
+                         history=hist, direction="in", text="好的")
+    assert slow["model"] == "claude-sonnet-5-5"
+    out = build_request(cfg=DEFAULTS, user_instructions="", vendor="老王", history=hist,
+                        direction="out", text="샘플", tone="polite")
+    assert out["model"] == "claude-sonnet-5-5"     # 보낼 문장은 기본 AI 그대로

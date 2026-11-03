@@ -177,9 +177,13 @@ def segment_chat(img, lines: list[Line], chat_left: float, chat_right: float, to
                 rows.append([l.y0, [l.text]])
         text = "\n".join("".join(r[1]) for r in rows).strip()
         pix = arr[ay0:ay1, ax0:ax1].reshape(-1, 3)
-        colors, counts = np.unique(pix // 4 * 4, axis=0, return_counts=True)
-        mode = tuple(int(v) for v in colors[counts.argmax()])
-        share = counts.max() / len(pix)
+        # 가장 많은 색 (4단계로 묶음) — 색을 숫자 하나로 바꿔 한꺼번에 세기 (빠름)
+        q = pix // 4
+        key = (q[:, 0].astype(np.int64) << 12) | (q[:, 1].astype(np.int64) << 6) | q[:, 2]
+        counts = np.bincount(key, minlength=1)
+        best = int(counts.argmax())
+        mode = (((best >> 12) & 63) * 4, ((best >> 6) & 63) * 4, (best & 63) * 4)
+        share = counts[best] / len(pix)
         bw, bh = ax1 - ax0, ay1 - ay0
         if not inside and ocr_fn and share >= 0.45 and (_is_light(mode, bg) or _is_green(mode)) \
                 and bh <= 200 and _uniform_border(arr, ax0, ay0, ax1, ay1, mode):
@@ -267,3 +271,4 @@ def _text_fills(lines, y0: int, y1: int) -> bool:
         return False
     text_h = sum(l.y1 - l.y0 for l in lines)
     return (y1 - y0) - text_h <= 45 + 12 * max(0, len(lines) - 1)
+

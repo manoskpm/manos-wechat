@@ -155,18 +155,36 @@ def background_color(img, chat_left: float, top: int):
     return max(set(pixels), key=pixels.count) if pixels else None
 
 
+def _gray(img) -> np.ndarray:
+    return np.asarray(img.convert("L"), dtype=np.int32)
+
+
+def _column_modes(img, x_from: int, x_to: int):
+    """세로줄마다 가장 많은 밝기와 그 비율 (화면 15~85% 높이, 5줄 간격) — 한꺼번에 계산."""
+    g = _gray(img)
+    h = g.shape[0]
+    sub = g[int(h * 0.15):int(h * 0.85):5, x_from:x_to]
+    n = sub.shape[0]
+    if n == 0 or sub.shape[1] == 0:
+        return np.zeros(0, int), np.zeros(0)
+    cols = sub.shape[1]
+    counts = np.zeros((cols, 256), dtype=np.int32)
+    np.add.at(counts, (np.repeat(np.arange(cols)[None, :], n, axis=0), sub), 1)
+    return counts.argmax(axis=1), counts.max(axis=1) / n
+
+
 def _find_divider(img, chat_left: float, y_from: int, y_to: int) -> int | None:
     """대화 영역에서 가로로 쭉 이어진 얇은 선(제목 아래 선, 입력창 테두리)을 위에서부터 찾음."""
-    gray = img.convert("L")
     x0 = int(chat_left + (img.width - chat_left) * 0.2)
     x1 = int(chat_left + (img.width - chat_left) * 0.6)
     if x1 - x0 < 20:
         return None
-    xs = range(x0, x1, max(1, (x1 - x0) // 40))
+    # 줄마다 몇 군데 점의 밝기를 한꺼번에 계산 (한 점씩 읽으면 느림)
+    g = _gray(img)[:, x0:x1:max(1, (x1 - x0) // 40)]
+    means, spreads = g.mean(axis=1), g.max(axis=1) - g.min(axis=1)
 
     def row(y):
-        vals = [gray.getpixel((x, y)) for x in xs]
-        return sum(vals) / len(vals), max(vals) - min(vals)
+        return means[y], spreads[y]
 
     for y in range(max(2, y_from), min(img.height - 2, y_to)):
         mean, spread = row(y)
@@ -210,17 +228,13 @@ def detect_input_top(img, chat_left: float) -> int | None:
 def detect_chat_left_by_color(img) -> float | None:
     """대화 영역 왼쪽 끝 찾기 (색 기준): 왼쪽 아이콘 줄이나 대화방 목록이 끝나고
     대화 배경색이 시작되는 세로 경계. 위챗을 좁게 써서 대화방 목록이 없는 화면에서도 동작."""
-    from collections import Counter
-    gray = img.convert("L")
-    w, h = gray.size
-    ys = range(int(h * 0.15), int(h * 0.85), 5)
-
-    def mode(x):
-        c = Counter(gray.getpixel((x, y)) for y in ys).most_common(1)[0]
-        return c[0], c[1] / len(ys)
-
-    bg = mode(int(w * 0.8))[0]
-    modes = [mode(x) for x in range(int(w * 0.65))]
+    w = img.width
+    m, sh = _column_modes(img, 0, int(w * 0.65))
+    bm, _ = _column_modes(img, int(w * 0.8), int(w * 0.8) + 1)
+    if not len(bm):
+        return None
+    bg = int(bm[0])
+    modes = list(zip(m.tolist(), sh.tolist()))
     for x in range(30, len(modes) - 14):
         near_bg = lambda m: abs(m[0] - bg) <= 2 and m[1] >= 0.6
         if near_bg(modes[x]) and not near_bg(modes[x - 1]) and all(near_bg(m) for m in modes[x:x + 12]):
@@ -231,18 +245,14 @@ def detect_chat_left_by_color(img) -> float | None:
 def detect_chat_right_by_color(img, chat_left: float) -> float | None:
     """대화 영역 오른쪽 끝 찾기: 위챗 4.2 에서 모멘트 등 다른 창이 대화창 오른쪽에 붙어 열린 경우,
     대화 배경색이 끝나는 세로 경계. 없으면 None (창 끝까지 대화 영역)."""
-    from collections import Counter
-    gray = img.convert("L")
-    w, h = gray.size
-    ys = range(int(h * 0.15), int(h * 0.85), 5)
-
-    def mode(x):
-        c = Counter(gray.getpixel((x, y)) for y in ys).most_common(1)[0]
-        return c[0], c[1] / len(ys)
-
-    bg = mode(int(chat_left) + 8)[0]
+    w = img.width
+    bm, _ = _column_modes(img, int(chat_left) + 8, int(chat_left) + 9)
+    if not len(bm):
+        return None
+    bg = int(bm[0])
     start = int(chat_left) + 200
-    modes = [mode(x) for x in range(start, w - 4)]
+    m, sh = _column_modes(img, start, w - 4)
+    modes = list(zip(m.tolist(), sh.tolist()))
     # 대화 배경이 아닌 '한 가지 색으로 꽉 찬' 세로줄이 이어지면 경계 (말풍선이 지나는 줄은 색이 섞여서 제외됨)
     for i in range(len(modes) - 6):
         if all(abs(m[0] - bg) > 2 and m[1] >= 0.85 for m in modes[i:i + 6]):
@@ -540,6 +550,9 @@ class ScreenReader:
             for op in getattr(getattr(self._ocr, "text_detector", None), "preprocess_op", []) or []:
                 if hasattr(op, "limit_type"):
                     op.limit_type, op.limit_side_len = "max", 2000
+            rec = getattr(self._ocr, "text_recognizer", None)
+            if rec is not None and hasattr(rec, "rec_batch_num"):
+                rec.rec_batch_num = 16   # 글자 줄을 한 번에 더 많이 읽음
         return self._ocr
 
     def scan_image(self, full, roi=None, prev=None) -> ScanResult:

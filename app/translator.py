@@ -32,7 +32,7 @@ def build_request(*, cfg: dict, user_instructions: str, vendor: str, history: li
     if user_instructions.strip():
         system += "\n## 대표의 추가 지시 (우선 적용)\n" + user_instructions.strip() + "\n"
 
-    convo = format_history(history, cfg.get("history_for_prompt", 12))
+    convo = format_history(history, min(cfg.get("history_for_prompt", 6), 6))   # 최근 6줄만 (빠르게)
     if direction == "in":
         task = (
             "작업: incoming. 아래 업체 메시지를 한국어로 옮겨. (번역만)\n"
@@ -55,6 +55,16 @@ def build_request(*, cfg: dict, user_instructions: str, vendor: str, history: li
         schema = OUTGOING_SCHEMA
 
     user_content = f"거래처: {vendor or '(알 수 없음)'}\n\n최근 대화:\n{convo}\n\n{task}"
+    if direction == "in" and cfg.get("fast_incoming", True):
+        # 받은 업체 글 번역은 빠른 AI 로: 생각 단계 없이 바로 답함 (빠른 AI 는 서버 대체 기능이 없어서 그 설정은 뺌)
+        return {
+            "model": cfg.get("fast_model", "claude-haiku-5-5"),
+            "max_tokens": 2000,
+            "system": [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
+            "messages": [{"role": "user", "content": user_content}],
+            "thinking": {"type": "disabled"},
+            "output_config": {"effort": "low", "format": {"type": "json_schema", "schema": schema}},
+        }
     return {
         "model": cfg.get("model", "claude-sonnet-5-5"),
         "max_tokens": 4000,

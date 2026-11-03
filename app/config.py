@@ -43,7 +43,10 @@ DEFAULTS = {
     # 대화방 이름 → 대표님이 바꾼 표시 이름
     "aliases": {},
     "known_vendors": [],
-    "history_for_prompt": 12,
+    "history_for_prompt": 6,
+    # 받은 업체 글 번역만 빠른 AI 로 (보낼 문장 후보·속뜻 풀이는 기본 AI 그대로). ⚙ 설정에서 끄고 켬
+    "fast_incoming": True,
+    "fast_model": "claude-haiku-5-5",
     "quick_phrases": [
         "단가 확인 부탁드립니다",
         "출고일 알려주세요",

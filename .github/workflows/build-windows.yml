@@ -83,4 +83,4 @@ jobs:
           git log -1 --format=%B > notes.txt
           gh release create "v${{ github.run_number }}" dist/ManosTranslator.zip dist_onefile/ManosTranslator.exe \
             dist/ManosTranslator-Setup.exe \
-            --target "${{ github.sha }}" --title "발주 번역기 v${{ github.run_number }}" --notes-file notes.txt
+            --target "${{ github.sha }}" --title "바로통 v${{ github.run_number }}" --notes-file notes.txt

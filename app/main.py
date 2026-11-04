@@ -13,7 +13,7 @@ from app import win_window
 def _message(text: str) -> None:
     if sys.platform == "win32":
         import ctypes
-        ctypes.windll.user32.MessageBoxW(None, text, "발주 번역기", 0x40)
+        ctypes.windll.user32.MessageBoxW(None, text, "바로통", 0x40)
 
 
 def main():

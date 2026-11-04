@@ -404,7 +404,7 @@ class Panel(QWidget):
         super().__init__(None, Qt.FramelessWindowHint)
         self._owner = None
         self.setObjectName("root")
-        self.setWindowTitle(f"발주 번역기 v{VERSION}")
+        self.setWindowTitle(f"바로통 v{VERSION}")
         if shortcuts.icon_path():
             self.setWindowIcon(QIcon(shortcuts.icon_path()))
         self.setStyleSheet(STYLE)

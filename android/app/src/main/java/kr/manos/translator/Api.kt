@@ -12,7 +12,7 @@ object Api {
     private const val ENDPOINT = "https://api.anthropic.com/v1/messages"
 
     fun call(apiKey: String, body: JSONObject, beta: Boolean): JSONObject {
-        if (apiKey.isBlank()) throw ApiError(-2, "API 키가 없어요. 발주 번역기 앱을 열어서 API 키를 넣어 주세요.")
+        if (apiKey.isBlank()) throw ApiError(-2, "API 키가 없어요. 바로통 앱을 열어서 API 키를 넣어 주세요.")
         val conn = URL(if (beta) "$ENDPOINT?beta=true" else ENDPOINT).openConnection() as HttpURLConnection
         try {
             conn.requestMethod = "POST"
@@ -45,7 +45,7 @@ object Api {
             ""
         }
         return when (code) {
-            401 -> "API 키가 올바르지 않아요. 발주 번역기 앱에서 키를 다시 넣어 주세요."
+            401 -> "API 키가 올바르지 않아요. 바로통 앱에서 키를 다시 넣어 주세요."
             403 -> "API 사용 권한이 없어요. 결제 정보나 사용 한도를 확인해 주세요."
             429 -> "요청이 너무 많아요. 잠시 후 다시 눌러 주세요."
             else -> "요청 오류($code) " + detail.take(160)

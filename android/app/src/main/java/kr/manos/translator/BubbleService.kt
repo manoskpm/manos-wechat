@@ -68,7 +68,7 @@ class BubbleService : Service() {
             this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE
         )
         val n = Notification.Builder(this, CHANNEL)
-            .setContentTitle("발주 번역기")
+            .setContentTitle("바로통")
             .setContentText("초록 버튼이 켜져 있어요 (누르면 설정 열기)")
             .setSmallIcon(android.R.drawable.ic_dialog_info)
             .setContentIntent(open)

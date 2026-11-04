@@ -89,7 +89,7 @@ class SheetActivity : Activity() {
     }
 
     private fun showMessage(msg: String) {
-        header("🈯 발주 번역기")
+        header("🈯 바로통")
         content.addView(label(msg, 16f, Colors.TEXT), lp(MATCH, WRAP, 12, this))
     }
 
@@ -112,7 +112,7 @@ class SheetActivity : Activity() {
     private fun showTranslation(inc: Incoming, cached: Boolean, intent: Boolean) {
         Store.lastZh = original
         Store.lastKo = inc.korean
-        header("🈯 발주 번역기")
+        header("🈯 바로통")
         val src = label(original, 13f, Colors.SUB)
         src.maxLines = 4
         content.addView(src, lp(MATCH, WRAP, 10, this))
@@ -160,7 +160,7 @@ class SheetActivity : Activity() {
     }
 
     private fun showError(msg: String, retry: () -> Unit) {
-        header("🈯 발주 번역기")
+        header("🈯 바로통")
         val m = label(msg, 15f, 0xFFC0392B.toInt())
         content.addView(m, lp(MATCH, WRAP, 12, this))
         content.addView(pill("다시 해 보기", true) { retry() }, lp(MATCH, WRAP, 12, this))

@@ -11,6 +11,8 @@ $exe = $env:MANOS_EXE
 $shell = New-Object -ComObject WScript.Shell
 $links = @(
   (Join-Path ([Environment]::GetFolderPath('Desktop')) '위챗+번역기.lnk'),
+  (Join-Path ([Environment]::GetFolderPath('Programs')) '바로통\위챗+번역기.lnk'),
+  (Join-Path ([Environment]::GetFolderPath('Programs')) '바로통\번역기만 켜기.lnk'),
   (Join-Path ([Environment]::GetFolderPath('Programs')) '발주 번역기\위챗+번역기.lnk'),
   (Join-Path ([Environment]::GetFolderPath('Programs')) '발주 번역기\번역기만 켜기.lnk')
 )

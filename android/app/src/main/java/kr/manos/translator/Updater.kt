@@ -144,7 +144,7 @@ object Updater {
         val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         nm.createNotificationChannel(NotificationChannel(CHANNEL, "앱 업데이트", NotificationManager.IMPORTANCE_DEFAULT))
         val b = Notification.Builder(ctx, CHANNEL)
-            .setContentTitle("발주 번역기 업데이트")
+            .setContentTitle("바로통 업데이트")
             .setContentText(text)
             .setSmallIcon(android.R.drawable.stat_sys_download_done)
             .setAutoCancel(true)

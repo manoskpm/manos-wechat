@@ -37,7 +37,7 @@ class MainActivity : Activity() {
         setContentView(scroll)
 
         val version = try { packageManager.getPackageInfo(packageName, 0).versionName } catch (e: Exception) { "" }
-        col.addView(label("발주 번역기", 26f, Colors.TEXT, true))
+        col.addView(label("바로통", 26f, Colors.TEXT, true))
         col.addView(label("버전 $version · 위챗·1688 채팅 번역과 답장", 13f, Colors.SUB), lp(MATCH, WRAP, 2, this))
         status = label("", 15f, Colors.TEXT)
         status.setPadding(dp(14), dp(12), dp(14), dp(12))

@@ -219,6 +219,8 @@ class SheetActivity : Activity() {
     private fun showReplies(ko: String, rep: Replies, cached: Boolean) {
         header("✍️ 답장 후보" + if (cached) "  ·  저장소에서 바로 (무료)" else "")
         content.addView(label(ko, 14f, Colors.SUB), lp(MATCH, WRAP, 8, this))
+        content.addView(label("후보를 누르면 복사하고 창이 닫혀요 → 위챗에서 붙여넣기", 12f, Colors.GREEN), lp(MATCH, WRAP, 4, this))
+        val picks = ArrayList<(Boolean) -> Unit>()
         val cards = ArrayList<LinearLayout>()
         val marks = ArrayList<TextView>()
         rep.options.forEachIndexed { i, o ->
@@ -236,7 +238,7 @@ class SheetActivity : Activity() {
             if (o.back.isNotBlank()) card.addView(label("↩ " + o.back, 12f, Colors.SUB), lp(MATCH, WRAP, 3, this))
             cards.add(card)
             marks.add(mark)
-            val pick = {
+            val pick = { close: Boolean ->
                 copy(o.chinese)
                 cards.forEachIndexed { j, c ->
                     val on = j == i
@@ -244,12 +246,18 @@ class SheetActivity : Activity() {
                         if (on) dp(2) else dp(1), if (on) Colors.GREEN else Colors.LINE)
                     marks[j].text = if (on) "✓ 복사됨 · 위챗 입력창에 붙여넣기" else ""
                 }
+                if (close) {
+                    // 고르면 창을 닫아서, 바로 위챗 입력창에 붙여넣을 수 있게
+                    Toast.makeText(this, "복사됐어요 · 붙여넣으세요", Toast.LENGTH_SHORT).show()
+                    card.postDelayed({ finish() }, 350)
+                }
             }
-            card.setOnClickListener { pick() }
+            picks.add(pick)
+            card.setOnClickListener { pick(true) }
             content.addView(card, lp(MATCH, WRAP, 8, this))
         }
         if (rep.options.isNotEmpty()) {
-            cards[0].performClick()   // 추천 문장은 바로 복사해 둠
+            picks[0](false)   // 추천 문장은 바로 복사해 둠 (창은 그대로)
         } else {
             content.addView(label("후보가 비어 있어요. 다시 만들어 주세요.", 15f, Colors.NOTE_TEXT), lp(MATCH, WRAP, 10, this))
         }

@@ -15,6 +15,9 @@ import android.os.IBinder
 import android.os.Looper
 import android.provider.Settings
 import android.view.Gravity
+import android.widget.FrameLayout
+import android.widget.Toast
+import android.graphics.drawable.Icon
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewConfiguration
@@ -26,10 +29,11 @@ class BubbleService : Service() {
     companion object {
         @Volatile var running = false
         private const val CHANNEL = "bubble"
+        const val ACTION_STOP = "kr.manos.translator.STOP_BUBBLE"
     }
 
     private var wm: WindowManager? = null
-    private var bubble: TextView? = null
+    private var bubble: View? = null
     private val handler = Handler(Looper.getMainLooper())
 
     /** 6시간마다 새 버전 확인 (켠 직후에도 한 번) */
@@ -48,7 +52,21 @@ class BubbleService : Service() {
         wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
     }
 
+    /** 초록 버튼을 끔 (✕ 버튼 또는 알림의 [끄기]). 꺼 둔 것은 기억해서 저절로 다시 뜨지 않음. */
+    private fun shutDown() {
+        Store.bubbleEnabled = false
+        Toast.makeText(this, "초록 버튼을 껐어요. 앱에서 다시 켤 수 있어요", Toast.LENGTH_SHORT).show()
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
+    }
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == ACTION_STOP) {
+            Store.bubbleEnabled = false
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf()
+            return START_NOT_STICKY
+        }
         startAsForeground()
         if (Settings.canDrawOverlays(this)) {
             addBubble()
@@ -67,12 +85,20 @@ class BubbleService : Service() {
         val open = PendingIntent.getActivity(
             this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE
         )
+        val stop = PendingIntent.getService(
+            this, 1, Intent(this, BubbleService::class.java).setAction(ACTION_STOP), PendingIntent.FLAG_IMMUTABLE
+        )
         val n = Notification.Builder(this, CHANNEL)
             .setContentTitle("바로통")
             .setContentText("초록 버튼이 켜져 있어요 (누르면 설정 열기)")
             .setSmallIcon(android.R.drawable.ic_dialog_info)
             .setContentIntent(open)
             .setOngoing(true)
+            .addAction(
+                Notification.Action.Builder(
+                    Icon.createWithResource(this, android.R.drawable.ic_menu_close_clear_cancel), "끄기", stop
+                ).build()
+            )
             .build()
         if (Build.VERSION.SDK_INT >= 34) {
             startForeground(1, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
@@ -84,6 +110,9 @@ class BubbleService : Service() {
     private fun addBubble() {
         if (bubble != null) return
         val size = dp(54)
+        val badge = dp(22)
+        val total = size + dp(8)
+        val box = FrameLayout(this)
         val b = TextView(this)
         b.text = "번"
         b.textSize = 20f
@@ -97,14 +126,14 @@ class BubbleService : Service() {
         b.background = bg
 
         val lp = WindowManager.LayoutParams(
-            size, size,
+            total, total,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
             PixelFormat.TRANSLUCENT
         )
         lp.gravity = Gravity.TOP or Gravity.START
         val dm = resources.displayMetrics
-        lp.x = dm.widthPixels - size - dp(6)
+        lp.x = dm.widthPixels - total - dp(2)
         lp.y = (dm.heightPixels * 0.42f).toInt()
 
         val slop = ViewConfiguration.get(this).scaledTouchSlop
@@ -140,7 +169,7 @@ class BubbleService : Service() {
                     if (moved) {
                         lp.x = startX + dx.toInt()
                         lp.y = startY + dy.toInt()
-                        wm?.updateViewLayout(b, lp)
+                        wm?.updateViewLayout(box, lp)
                     }
                     true
                 }
@@ -156,8 +185,22 @@ class BubbleService : Service() {
                 else -> false
             }
         }
-        wm?.addView(b, lp)
-        bubble = b
+        box.addView(b, FrameLayout.LayoutParams(size, size, Gravity.BOTTOM or Gravity.START))
+        // 오른쪽 위의 작은 ✕: 누르면 초록 버튼이 꺼짐
+        val x = TextView(this)
+        x.text = "✕"
+        x.textSize = 11f
+        x.setTextColor(Colors.WHITE)
+        x.gravity = Gravity.CENTER
+        val xbg = android.graphics.drawable.GradientDrawable()
+        xbg.shape = android.graphics.drawable.GradientDrawable.OVAL
+        xbg.setColor(0xDD444444.toInt())
+        xbg.setStroke(dp(1), Colors.WHITE)
+        x.background = xbg
+        x.setOnClickListener { shutDown() }
+        box.addView(x, FrameLayout.LayoutParams(badge, badge, Gravity.TOP or Gravity.END))
+        wm?.addView(box, lp)
+        bubble = box
     }
 
     private fun open(mode: String) {

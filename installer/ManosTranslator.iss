@@ -30,9 +30,10 @@ Source: "..\dist\ManosTranslator\*"; DestDir: "{app}"; Flags: ignoreversion recu
 [InstallDelete]
 ; 예전 이름(발주 번역기)의 시작 메뉴 폴더 정리
 Type: filesandordirs; Name: "{userprograms}\발주 번역기"
+Type: files; Name: "{userdesktop}\위챗+번역기.lnk"
 
 [Icons]
-Name: "{userdesktop}\위챗+번역기"; Filename: "{app}\ManosTranslator.exe"; Parameters: "--with-wechat"; IconFilename: "{app}\ManosTranslator.exe"
+Name: "{userdesktop}\바로통"; Filename: "{app}\ManosTranslator.exe"; Parameters: "--with-wechat"; IconFilename: "{app}\ManosTranslator.exe"
 Name: "{userprograms}\바로통\위챗+번역기"; Filename: "{app}\ManosTranslator.exe"; Parameters: "--with-wechat"; IconFilename: "{app}\ManosTranslator.exe"
 Name: "{userprograms}\바로통\번역기만 켜기"; Filename: "{app}\ManosTranslator.exe"
 Name: "{userprograms}\바로통\바로통 삭제"; Filename: "{uninstallexe}"

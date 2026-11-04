@@ -629,7 +629,7 @@ class ScreenReader:
         res.title_h, res.band_h = S(res.title_h), S(res.band_h)
         res.chat_top, res.chat_bottom, res.win_h = res.title_h, S(bottom), full.height
         # 화면 위·아래 끝에서 잘린 덩어리 표시는 실제 대화 영역 기준으로 다시 (일부만 읽은 경우 경계 착각 방지)
-        edge = 6 * scale
+        edge = 3 * scale   # 실제로 잘린 칸만 (제목 바로 아래에 온전히 보이는 말풍선은 잘린 게 아님)
         for it in res.items:
             if it.y0 <= res.chat_top + edge or it.y1 >= res.chat_bottom - edge:
                 it.extra["cut"] = True

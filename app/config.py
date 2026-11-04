@@ -47,6 +47,8 @@ DEFAULTS = {
     # 받은 업체 글 번역만 빠른 AI 로 (보낼 문장 후보·속뜻 풀이는 기본 AI 그대로). ⚙ 설정에서 끄고 켬
     "fast_incoming": True,
     "fast_model": "claude-haiku-5-5",
+    # 일하는 분야 (None = 아직 안 골랐음 → 처음 켤 때 물어봄). 분야별 단어장을 번역에 함께 알려 줌
+    "fields": None,
     "quick_phrases": [
         "단가 확인 부탁드립니다",
         "출고일 알려주세요",
@@ -184,11 +186,12 @@ def load_memory() -> dict:
         if isinstance(m, dict):
             m.setdefault("in", {})
             m.setdefault("out", {})
+            m.setdefault("tpl", {})   # 숫자만 다른 글용 문장 틀
             return m
     except (OSError, ValueError):
         pass
     # 처음에는 지금까지 쌓인 대화 기록에서 번역 기억을 채움
-    mem = {"in": {}, "out": {}}
+    mem = {"in": {}, "out": {}, "tpl": {}}
     from .chat_parser import memory_key
     for f in sorted((data_dir() / "history").glob("*.json"), key=lambda f: f.stat().st_mtime):
         try:
@@ -203,7 +206,7 @@ def load_memory() -> dict:
 
 
 def save_memory(mem: dict) -> None:
-    for k in ("in", "out"):
+    for k in ("in", "out", "tpl"):
         d = mem.get(k, {})
         while len(d) > MEMORY_MAX:   # 오래된 것부터 정리
             d.pop(next(iter(d)))

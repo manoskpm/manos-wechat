@@ -6,6 +6,7 @@ import json
 
 import anthropic
 
+from . import glossary
 from .prompts import INCOMING_SCHEMA, INTENT_SCHEMA, OUTGOING_SCHEMA, SYSTEM_PROMPT, TONES
 
 # 안전 분류기가 요청을 거절하면 서버가 알아서 다른 모델로 다시 처리하게 하는 기능
@@ -55,6 +56,9 @@ def build_request(*, cfg: dict, user_instructions: str, vendor: str, history: li
         schema = OUTGOING_SCHEMA
 
     user_content = f"거래처: {vendor or '(알 수 없음)'}\n\n최근 대화:\n{convo}\n\n{task}"
+    terms = glossary.relevant(cfg.get("fields"), text, direction)
+    if terms:   # 이 글에 나온 단어만 골라 알려 줌 (번역이 일관되고 정확해짐)
+        user_content += f"\n\n용어집 (이 글에 나온 단어는 아래 뜻으로 쓴다): {terms}"
     if direction == "in" and cfg.get("fast_incoming", True):
         # 받은 업체 글 번역은 빠른 AI 로: 생각 단계 없이 바로 답함 (빠른 AI 는 서버 대체 기능이 없어서 그 설정은 뺌)
         return {

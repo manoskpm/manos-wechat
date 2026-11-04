@@ -21,6 +21,7 @@ def panel(tmp_path, monkeypatch):
     monkeypatch.setattr(ui.threading, "Thread", lambda target, daemon: types.SimpleNamespace(start=target))
     cfg = C.load_config()
     cfg["api_key"] = "x"
+    cfg["fields"] = []   # 분야 선택 창이 시험을 막지 않게
     C.save_config(cfg)
     p = ui.Panel()
 

@@ -16,11 +16,12 @@ import uuid
 
 from PySide6.QtCore import QObject, QPoint, QRect, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QColor, QFont, QGuiApplication, QIcon
-from PySide6.QtWidgets import (QApplication, QFileDialog, QFrame, QHBoxLayout, QInputDialog, QLabel, QLayout,
+from PySide6.QtWidgets import (QApplication, QCheckBox, QDialog, QDialogButtonBox, QFileDialog, QFrame, QHBoxLayout, QInputDialog, QLabel, QLayout,
                                QLineEdit, QMenu, QMessageBox, QPlainTextEdit, QPushButton, QVBoxLayout, QWidget)
 
 from . import config as C
-from . import shortcuts, updater, win_window
+from . import glossary, shortcuts, updater, win_window
+from .sentence_tpl import apply_template, make_template
 from .chat_parser import CJK_RE, is_chinese_text, memory_key, normalize, similar
 from .segment import DURATION_RE, MONEY_RE, RECALL_RE, ko_time
 from .prompts import TONES
@@ -629,6 +630,35 @@ class Panel(QWidget):
             self._ask_api_key(first=True)
         if self.cfg.get("api_key"):
             self.translator = Translator(self.cfg["api_key"])
+        if self.cfg.get("fields") is None:   # 처음 켰을 때 한 번: 일하는 분야 고르기
+            self._ask_fields(first=True)
+
+    def _ask_fields(self, first=False):
+        """일하는 분야를 고르면 그 분야 단어장을 번역에 함께 알려 줌 (여러 개 고를 수 있음)."""
+        dlg = QDialog(self)
+        dlg.setWindowTitle("일하는 분야 선택")
+        lay = QVBoxLayout(dlg)
+        lay.addWidget(QLabel("주로 거래하는 분야를 골라 주세요. (여러 개 가능)\n"
+                             "고른 분야의 용어를 번역에 함께 알려 줘서 더 정확해집니다.\n"
+                             "나중에 ⚙ 설정 → 분야 선택에서 바꿀 수 있어요."))
+        boxes = []
+        cur = self.cfg.get("fields") or []
+        for name in glossary.FIELD_NAMES:
+            cb = QCheckBox(name)
+            cb.setChecked(name in cur)
+            lay.addWidget(cb)
+            boxes.append(cb)
+        bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        bb.accepted.connect(dlg.accept)
+        bb.rejected.connect(dlg.reject)
+        lay.addWidget(bb)
+        if dlg.exec():
+            self.cfg["fields"] = [cb.text() for cb in boxes if cb.isChecked()]
+        elif first:
+            self.cfg["fields"] = []   # 건너뜀 (다시 묻지 않음)
+        else:
+            return
+        C.save_config(self.cfg)
 
     def _ask_api_key(self, first=False):
         msg = ("Claude API 키를 붙여넣어 주세요.\n(sk-ant- 로 시작합니다. 이 컴퓨터에만 저장됩니다)"
@@ -654,6 +684,7 @@ class Panel(QWidget):
         m.addAction(dock)
         m.addSeparator()
         m.addAction("내 지시문·용어 편집", lambda: self._open(C.instructions_path()))
+        m.addAction("분야 선택 (용어 도움)", self._ask_fields)
         m.addAction("API 키 변경", self._ask_api_key)
         m.addAction("화면 인식 확인용 사진 저장", self._save_debug)
         m.addAction("데이터 폴더 열기", lambda: self._open(C.data_dir()))
@@ -750,6 +781,10 @@ class Panel(QWidget):
                     e["ko"] = m["ko"]
                     if m.get("intent"):
                         e.update(nuance=m.get("nuance", ""), certainty=m.get("certainty", "none"), intent=True)
+                else:
+                    t = apply_template(text, self.memory.setdefault("tpl", {}))   # 숫자만 다른 글이면 틀에 끼워서
+                    if t:
+                        e["ko"] = t
             self.history.append(e)
             self._dirty = True
         self._cache[key] = e
@@ -1017,10 +1052,16 @@ class Panel(QWidget):
             self.memory["in"][memory_key(entry["zh"])] = {"ko": entry["ko"], "nuance": entry.get("nuance", ""),
                                                          "certainty": entry.get("certainty", "none"),
                                                          "intent": bool(entry.get("intent"))}
+            tpl = make_template(entry["zh"], entry["ko"])
+            if tpl:
+                self.memory.setdefault("tpl", {})[tpl[0]] = tpl[1]
             C.save_memory(self.memory)
 
     def _translate_entry(self, entry):
         m = self.memory["in"].get(memory_key(entry.get("zh", "")))
+        if not (m and m.get("ko")):   # 숫자만 다른 글이면 저장된 문장 틀로
+            t = apply_template(entry.get("zh", ""), self.memory.setdefault("tpl", {}))
+            m = {"ko": t} if t else None
         if m and m.get("ko"):   # 전에 번역한 글 → AI 없이 바로
             entry.pop("pending", None)
             entry["ko"] = m["ko"]

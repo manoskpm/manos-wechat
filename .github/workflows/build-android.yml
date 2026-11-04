@@ -27,6 +27,33 @@ jobs:
       - name: Accept Android licenses
         run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
 
+      # 앱 서명 열쇠는 공개 저장소에 두지 않고, 보이지 않는 '초안 릴리스'에 한 번 만들어 두고 계속 씀
+      # (열쇠가 항상 같아야 앱이 업데이트됨. 초안 릴리스는 저장소 주인만 볼 수 있음)
+      - name: Prepare signing key
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          REPO="${{ github.repository }}"
+          KS=android/app/manos-android.keystore
+          rid=$(gh api "repos/$REPO/releases?per_page=100" --jq '[.[] | select(.draft==true and .tag_name=="android-signing")][0].id // empty')
+          aid=""
+          if [ -n "$rid" ]; then
+            aid=$(gh api "repos/$REPO/releases/$rid" --jq '[.assets[] | select(.name=="manos-android.keystore")][0].id // empty')
+          fi
+          if [ -n "$aid" ]; then
+            gh api -H "Accept: application/octet-stream" "repos/$REPO/releases/assets/$aid" > "$KS"
+            echo "저장된 서명 열쇠를 가져왔습니다"
+          else
+            keytool -genkeypair -keystore "$KS" -alias manos -storepass manos-android -keypass manos-android \
+              -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Manos Translator"
+            gh release create android-signing "$KS" --draft \
+              --title "안드로이드 서명 열쇠 (비공개 · 지우지 마세요)" \
+              --notes "앱 업데이트에 쓰는 서명 열쇠입니다. 지우면 앱을 지우고 다시 설치해야 합니다. 공개되지 않습니다."
+            echo "서명 열쇠를 새로 만들어 비공개로 보관했습니다"
+          fi
+          test -s "$KS"
+
       - name: Build APK
         working-directory: android
         run: gradle assembleDebug --no-daemon -Pvcode=${{ github.run_number }} -Pvname=${{ github.run_number }}

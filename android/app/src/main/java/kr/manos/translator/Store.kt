@@ -27,6 +27,20 @@ object Store {
         get() = prefs.getString("api_key", "") ?: ""
         set(v) { prefs.edit().putString("api_key", v.trim()).apply() }
 
+    /** 초록 버튼을 켜 둔 상태인지 (앱이 업데이트로 다시 설치된 뒤 자동으로 다시 켜기 위해). */
+    var bubbleEnabled: Boolean
+        get() = prefs.getBoolean("bubble_enabled", false)
+        set(v) { prefs.edit().putBoolean("bubble_enabled", v).apply() }
+
+    /** 앱 업데이트 상태 글 (설정 화면에 보임). */
+    var updateState: String
+        get() = prefs.getString("update_state", "") ?: ""
+        set(v) { prefs.edit().putString("update_state", v).apply() }
+
+    var lastUpdateCheck: Long
+        get() = prefs.getLong("last_update_check", 0L)
+        set(v) { prefs.edit().putLong("last_update_check", v).apply() }
+
     var fastIncoming: Boolean
         get() = prefs.getBoolean("fast_incoming", true)
         set(v) { prefs.edit().putBoolean("fast_incoming", v).apply() }

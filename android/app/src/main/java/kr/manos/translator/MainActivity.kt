@@ -24,6 +24,7 @@ class MainActivity : Activity() {
     private lateinit var toggle: TextView
     private lateinit var keyInput: EditText
     private lateinit var testResult: TextView
+    private lateinit var updateText: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -68,6 +69,17 @@ class MainActivity : Activity() {
         toggle = pill("", true) { toggleBubble() }
         col.addView(toggle, lp(MATCH, WRAP, 8, this))
 
+        col.addView(label("④ 앱 업데이트", 17f, Colors.TEXT, true), lp(MATCH, WRAP, 22, this))
+        col.addView(
+            label("앱을 켜거나 초록 버튼을 켤 때마다 새 버전을 확인해서 알아서 받고 설치해요. 버튼은 없어요.", 13f, Colors.SUB),
+            lp(MATCH, WRAP, 4, this)
+        )
+        updateText = label("", 14f, Colors.TEXT)
+        col.addView(updateText, lp(MATCH, WRAP, 6, this))
+        col.addView(pill("설치 허용 (자동 업데이트에 필요)", false) {
+            startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:$packageName")))
+        }, lp(MATCH, WRAP, 8, this))
+
         val fast = Switch(this)
         fast.text = "빠른 번역 (받은 업체 글을 더 빠른 AI로)"
         fast.textSize = 14f
@@ -93,6 +105,20 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         refresh()
+        // 앱을 열 때마다 새 버전 확인 → 있으면 바로 받아서 설치 요청
+        checkUpdate()
+        // 업데이트로 앱이 다시 설치된 뒤 버튼이 꺼져 있으면 다시 켬
+        if (Store.bubbleEnabled && !BubbleService.running && Settings.canDrawOverlays(this)) {
+            try { startForegroundService(Intent(this, BubbleService::class.java)) } catch (e: Exception) { }
+        }
+    }
+
+    private fun checkUpdate() {
+        updateText.text = "확인 중…"
+        Thread {
+            Updater.run(applicationContext)
+            runOnUiThread { refresh() }
+        }.start()
     }
 
     private fun refresh() {
@@ -104,6 +130,10 @@ class MainActivity : Activity() {
             "\n다른 앱 위에 표시: " + (if (overlay) "✅ 허용됨" else "❌ 허용 필요") +
             "\n초록 버튼: " + (if (on) "✅ 켜져 있음" else "꺼져 있음")
         toggle.text = if (on) "초록 버튼 끄기" else "초록 버튼 켜기"
+        val canInstall = packageManager.canRequestPackageInstalls()
+        updateText.text = "현재 v" + Updater.currentVersion(this) + " · " +
+            (Store.updateState.ifBlank { "아직 확인 전" }) +
+            "\n설치 허용: " + (if (canInstall) "✅ 허용됨" else "❌ 필요 (아래 버튼)")
     }
 
     private fun saveKey() {
@@ -147,6 +177,7 @@ class MainActivity : Activity() {
         if (BubbleService.running) {
             stopService(i)
             BubbleService.running = false
+            Store.bubbleEnabled = false
         } else {
             if (!Settings.canDrawOverlays(this)) {
                 Toast.makeText(this, "먼저 ② 다른 앱 위에 표시를 허용해 주세요", Toast.LENGTH_LONG).show()
@@ -159,6 +190,7 @@ class MainActivity : Activity() {
             }
             startForegroundService(i)
             BubbleService.running = true
+            Store.bubbleEnabled = true
         }
         window.decorView.postDelayed({ refresh() }, 400)
     }

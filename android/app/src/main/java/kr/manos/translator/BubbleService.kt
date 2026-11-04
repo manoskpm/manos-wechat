@@ -32,6 +32,14 @@ class BubbleService : Service() {
     private var bubble: TextView? = null
     private val handler = Handler(Looper.getMainLooper())
 
+    /** 6시간마다 새 버전 확인 (켠 직후에도 한 번) */
+    private val updateTick = object : Runnable {
+        override fun run() {
+            Thread { Updater.run(applicationContext) }.start()
+            handler.postDelayed(this, 6L * 3600 * 1000)
+        }
+    }
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
@@ -45,6 +53,8 @@ class BubbleService : Service() {
         if (Settings.canDrawOverlays(this)) {
             addBubble()
             running = true
+            handler.removeCallbacks(updateTick)
+            handler.postDelayed(updateTick, 3000)   // 켜자마자 새 버전 확인
         } else {
             stopSelf()
         }
@@ -158,6 +168,7 @@ class BubbleService : Service() {
     }
 
     override fun onDestroy() {
+        handler.removeCallbacks(updateTick)
         running = false
         bubble?.let { try { wm?.removeView(it) } catch (e: Exception) { } }
         bubble = null

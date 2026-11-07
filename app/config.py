@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 from pathlib import Path
 
 APP_NAME = "ManosWeChatTranslator"
@@ -205,7 +206,24 @@ def load_memory() -> dict:
     return mem
 
 
-def save_memory(mem: dict) -> None:
+_mem_pending = False
+_mem_last = 0.0
+
+
+def save_memory(mem: dict, force: bool = False) -> None:
+    """번역 저장소 저장. 글이 많아지면 통째로 쓰는 게 무거워서, 3초 안에 또 바뀐 건 모아서 한 번에 씀
+    (모아 둔 것은 UI 가 주기적으로 flush_memory 로 마저 저장하고, 끌 때도 저장)."""
+    global _mem_pending
+    _mem_pending = True
+    if force or time.time() - _mem_last >= 3:
+        flush_memory(mem)
+
+
+def flush_memory(mem: dict, due_only: bool = False) -> None:
+    global _mem_pending, _mem_last
+    if not _mem_pending or (due_only and time.time() - _mem_last < 3):
+        return
+    _mem_pending, _mem_last = False, time.time()
     for k in ("in", "out", "tpl"):
         d = mem.get(k, {})
         while len(d) > MEMORY_MAX:   # 오래된 것부터 정리

@@ -480,6 +480,8 @@ class ScreenReader:
         self._last_full = 0.0
         self._sct = None
         self._sct_thread = None
+        self._recheck = None       # (화면 열쇠, 시각): 사진으로 읽힌 칸이 있으면 잠시 뒤 한 번 더 전체를 읽어 확인
+        self._rechecked: list = []
         self._scan_cache: list = []   # 최근에 읽은 화면 (같은 화면이면 다시 읽지 않음)
         self.own_hwnd_getter = own_hwnd_getter
         self.log_path = log_path
@@ -782,6 +784,27 @@ class ScreenReader:
         except Exception as e:
             self._log(f"대화 저장 실패: {e}")
 
+    def _recheck_photos(self, rect):
+        """사진·이모티콘으로 읽힌 칸이 있던 화면이 그대로면 한 번만 전체를 다시 읽음.
+        (글자 인식이 한 번 놓친 말풍선이 사진 칸으로 남아 번역이 안 되는 것을 막음. 진짜 사진이면 결과가 같아 아무 일 없음)"""
+        key, _ = self._recheck
+        self._recheck = None
+        img = self._grab(rect)
+        self._mask_own_panel(img, rect)
+        if self._exact_key(img) != key or self._last_res is None or self._chat_box is None \
+                or img.height != self._chat_box[4]:
+            return   # 그 사이 화면이 바뀜 → 새 화면은 따로 읽음
+        old = [(i.kind, i.y0, i.y1) for i in self._last_res.items]
+        res = self.scan_image(img)
+        if [(i.kind, i.y0, i.y1) for i in res.items] == old:
+            return
+        self._last_res, self._shift_acc = res, 0
+        self._scan_cache = [(k, r) for k, r in self._scan_cache if k != key] + [(key, res)]
+        self._remember_box(img, res)
+        self._room_update(img, res, known=self._room is not None)
+        self._log(f"다시 읽기로 고침 덩어리={[(i.kind, i.side) for i in res.items]}")
+        self.on_scan(res)
+
     @staticmethod
     def _exact_key(img) -> bytes:
         """같은 화면인지 확인용 (거의 그대로일 때만 같음)."""
@@ -870,6 +893,8 @@ class ScreenReader:
             return
         if self.on_shift and self._motion_tick(rect):
             return   # 스크롤 중 → 번역 칸만 따라 움직이고, 멈춘 뒤에 읽음
+        if self._recheck is not None and time.time() >= self._recheck[1]:
+            self._recheck_photos(rect)
         if time.time() - self._last_full < 0.25:
             return   # 전체 화면 확인은 0.25초마다 (스크롤 시작은 위의 빠른 길이 0.12초마다 확인)
         self._last_full = time.time()
@@ -943,6 +968,9 @@ class ScreenReader:
             res = self.scan_image(img, roi=roi, prev=prev)
         self._last_res, self._shift_acc = res, 0
         self._scan_cache = (self._scan_cache + [(key, res)])[-30:]
+        if key not in self._rechecked and any(i.kind in ("photo", "sticker", "unknown") for i in res.items):
+            self._rechecked = (self._rechecked + [key])[-30:]
+            self._recheck = (key, time.time() + 1.5)   # 1.5초 뒤에도 같은 화면이면 한 번 다시 읽어 확인
         self._remember_box(img, res)
         self._room_update(img, res, known=known)
         self.status = "자동 읽기 중"

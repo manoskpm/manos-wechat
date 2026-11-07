@@ -130,8 +130,12 @@ def parse_chat(lines: list[Line], width: float, height: float,
     return vendor, bubbles
 
 
+_EMOJI_TAIL = re.compile(r"(?<=[\u4e00-\u9fff。！？，、…])[Aa]{1,3}$")
+
+
 def normalize(text: str) -> str:
-    return re.sub(r"\s+", "", text)
+    """같은 글인지 비교용: 띄어쓰기와, 글 끝 이모티콘을 글자 인식이 'A'로 읽은 것은 무시."""
+    return _EMOJI_TAIL.sub("", re.sub(r"\s+", "", text))
 
 
 def memory_key(text: str) -> str:
@@ -145,7 +149,14 @@ def similar(a: str, b: str, threshold: float = 0.85) -> bool:
         return False
     if a == b:
         return True
-    return SequenceMatcher(None, a, b).ratio() >= threshold
+    # 느린 비교(SequenceMatcher)를 하기 전에, 길이·글자 구성이 너무 다르면 바로 '다름'
+    la, lb = len(a), len(b)
+    if min(la, lb) / max(la, lb) < threshold:
+        return False
+    sm = SequenceMatcher(None, a, b, autojunk=False)
+    if sm.real_quick_ratio() < threshold or sm.quick_ratio() < threshold:
+        return False
+    return sm.ratio() >= threshold
 
 
 def find_new_incoming(bubbles: list[Bubble], known_texts: list[str], max_new: int = 3) -> list[str]:

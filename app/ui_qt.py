@@ -1535,6 +1535,7 @@ class Panel(QWidget):
                 self._translate_entry(entry)
 
     def _status_tick(self):
+        C.flush_memory(self.memory, due_only=True)
         text = self._status if self._status.startswith("번역") else self.reader.status
         self.status_lbl.setText(text)
 
@@ -1569,6 +1570,7 @@ class Panel(QWidget):
                 updater.apply_and_restart(self._pending_update, restart=False)
                 self._pending_update = None
             self.reader.stop()
+            C.flush_memory(self.memory)
         finally:
             QApplication.instance().quit()
 

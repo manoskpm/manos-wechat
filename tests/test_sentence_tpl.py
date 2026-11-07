@@ -49,3 +49,25 @@ def test_glossary_in_request():
 def test_unselected_field_not_included():
     assert "手办" not in glossary.relevant([], "手办", "in")
     assert "手办" in glossary.relevant(["피규어·굿즈"], "手办", "in")
+
+
+def test_similar_fast_and_emoji_tail():
+    from app.chat_parser import similar
+    a = "放心吧，后面品质方面我们会给你把关的"
+    assert similar(a, a + "A") and similar(a + "AA", a)      # 이모티콘이 A로 읽힌 것은 같은 글
+    assert not similar(a, "老板，您追加寄来的大包样品，我这边也有一点担心")
+    assert similar("老板我这边已经为这批商品支付了物流费用", "老板我这边已经为这批商品支付了物流费用。")
+
+
+def test_memory_save_is_batched(tmp_path, monkeypatch):
+    from app import config as C
+    monkeypatch.setattr(C, "data_dir", lambda: tmp_path)
+    monkeypatch.setattr(C, "_mem_last", 0.0)
+    mem = {"in": {"a": 1}, "out": {}, "tpl": {}}
+    C.save_memory(mem)                      # 처음엔 바로 저장
+    assert (tmp_path / "memory.json").exists()
+    mem["in"]["b"] = 2
+    C.save_memory(mem)                      # 3초 안이면 모아 둠
+    assert "b" not in (tmp_path / "memory.json").read_text(encoding="utf-8")
+    C.flush_memory(mem)                     # 끌 때는 반드시 저장
+    assert "b" in (tmp_path / "memory.json").read_text(encoding="utf-8")

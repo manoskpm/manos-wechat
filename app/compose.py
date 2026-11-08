@@ -9,7 +9,8 @@ import re
 import sys
 
 from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QPlainTextEdit, QPushButton, QVBoxLayout,
+                               QWidget)
 
 FONT = "Malgun Gothic" if sys.platform == "win32" else "WenQuanYi Zen Hei"
 GREEN = "#07c160"
@@ -243,7 +244,7 @@ class ComposeWindow(QWidget):
             first.set_picked(True)
 
     def show_reading(self, zh: str, ko: str, nuance: str = "", title: str = "원문",
-                     intent_state: str = "", on_intent=None):
+                     intent_state: str = "", on_intent=None, on_edit=None):
         """말풍선을 눌렀을 때·업체 글을 복사(Ctrl+C)했을 때: 원문과 번역, 속뜻을 크게."""
         self._close_timer.stop()
         self._clear()
@@ -255,6 +256,8 @@ class ComposeWindow(QWidget):
         ko_lab = self._label(ko, "zh", wrap=True)
         ko_lab.setTextInteractionFlags(Qt.TextSelectableByMouse)
         self._add(ko_lab)
+        if on_edit:
+            self._add(self._edit_row(ko, on_edit))
         if nuance:
             box = QFrame()
             box.setObjectName("notebox")
@@ -279,6 +282,34 @@ class ComposeWindow(QWidget):
             holder.setLayout(row)
             self._add(holder)
         self.body.addStretch(1)
+
+    def _edit_row(self, ko: str, on_edit) -> QWidget:
+        """[✏ 번역 고치기] → 글상자로 바뀌고, [저장]을 누르면 그 글이 다음부터 이 문장의 번역이 됨 (AI 사용 없음)."""
+        holder = QWidget()
+        lay = QVBoxLayout(holder)
+        lay.setContentsMargins(0, 0, 0, 0)
+        btn = QPushButton("✏ 번역 고치기")
+        btn.setObjectName("flat")
+        btn.setCursor(Qt.PointingHandCursor)
+        row = QHBoxLayout()
+        row.addWidget(btn)
+        row.addStretch(1)
+        lay.addLayout(row)
+
+        def open_editor():
+            btn.hide()
+            box = QPlainTextEdit(ko)
+            box.setFixedHeight(90)
+            save = QPushButton("저장")
+            save.setObjectName("apply")
+            save.setCursor(Qt.PointingHandCursor)
+            save.clicked.connect(lambda: box.toPlainText().strip() and on_edit(box.toPlainText().strip()))
+            lay.addWidget(box)
+            lay.addWidget(save)
+            box.setFocus()
+
+        btn.clicked.connect(open_editor)
+        return holder
 
     def show_error(self, msg: str):
         self._clear()

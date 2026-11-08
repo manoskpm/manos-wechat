@@ -232,3 +232,50 @@ def flush_memory(mem: dict, due_only: bool = False) -> None:
         memory_path().write_text(json.dumps(mem, ensure_ascii=False), encoding="utf-8")
     except OSError:
         pass
+
+
+LEARNED_MAX = 2000
+_TERM_ZH = re.compile(r"^[\u4e00-\u9fff]{2,8}$")
+
+
+def learned_path() -> Path:
+    return data_dir() / "learned_terms.json"
+
+
+def load_learned() -> dict:
+    """쓰면서 배운 단어 {중국어: {"ko": 한국어, "n": 본 횟수}}."""
+    try:
+        d = json.loads(learned_path().read_text(encoding="utf-8"))
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def save_learned(d: dict) -> None:
+    while len(d) > LEARNED_MAX:   # 한 번만 본 오래된 것부터 정리
+        d.pop(min(d, key=lambda k: (d[k].get("n", 0))))
+    try:
+        learned_path().write_text(json.dumps(d, ensure_ascii=False, indent=1), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def learn_terms(learned: dict, text: str, terms) -> bool:
+    """AI가 뽑아 준 단어 쌍을 검사해서 배운 단어에 넣음. 바뀐 게 있으면 True.
+    (원문에 실제로 있는 2~8자 중국어 단어만, 숫자·긴 뜻은 거름)"""
+    changed = False
+    if not isinstance(terms, list):
+        return False
+    for t in terms[:3]:
+        if not isinstance(t, dict):
+            continue
+        zh, ko = str(t.get("zh", "")).strip(), str(t.get("ko", "")).strip()
+        if not _TERM_ZH.match(zh) or zh not in text or not (1 <= len(ko) <= 20) or re.search(r"\d", ko):
+            continue
+        cur = learned.get(zh)
+        if cur and cur.get("ko") == ko:
+            cur["n"] = cur.get("n", 1) + 1
+        else:
+            learned[zh] = {"ko": ko, "n": 1}
+        changed = True
+    return changed

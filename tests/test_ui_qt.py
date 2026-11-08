@@ -245,3 +245,27 @@ def test_first_candidate_shows_before_all_done(panel):
     p._drain_queue()
     assert seen == [(["中:첫"], "中:첫")]                        # 첫 후보만 먼저, 이미 복사됨
     assert [w.opt["chinese"] for w in p.compose._widgets if isinstance(w, _Option)] == ["中:첫", "中:둘"]
+
+
+def test_fix_translation_stats_and_phrases(panel):
+    p = panel
+    e = {"id": "e1", "zh": "库存有500个", "ko": "재고 500개", "side": "in", "kind": "text"}
+    p.history.append(e)
+    p._fix_translation(e, "재고가 500개 있어요")
+    assert p.memory["in"]["库存有500个"]["ko"] == "재고가 500개 있어요"
+    assert p.memory["in"]["库存有500个"]["fixed"] is True
+    e2 = p._entry_for("in", "库存有300个")   # 숫자만 다른 글 → 고친 번역 틀로 바로
+    assert e2["ko"] == "재고가 300개 있어요"
+    assert "AI 없이 처리" in p._status_text()
+    p.memory["freq"] = {"샘플 먼저 보내주세요": 3, "한 번만": 1}
+    p._fill_phrase_menu(p._phrase_menu)
+    texts = [a.text() for a in p._phrase_menu.actions()]
+    assert "샘플 먼저 보내주세요" in texts and "한 번만" not in texts
+
+
+def test_terms_are_learned_from_incoming(panel):
+    p = panel
+    e = {"id": "e2", "zh": "底板要加厚", "ko": "", "side": "in", "kind": "text", "pending": True}
+    p.history.append(e)
+    p._handle_done("in", p.vendor, "e2", e["zh"], {"korean": "밑판은 두껍게", "terms": [{"zh": "底板", "ko": "밑판"}]})
+    assert p.learned["底板"]["ko"] == "밑판"

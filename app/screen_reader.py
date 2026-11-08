@@ -239,6 +239,13 @@ def detect_chat_left_by_color(img) -> float | None:
         near_bg = lambda m: abs(m[0] - bg) <= 2 and m[1] >= 0.6
         if near_bg(modes[x]) and not near_bg(modes[x - 1]) and all(near_bg(m) for m in modes[x:x + 12]):
             return float(x)
+    # 오른쪽 줄이 내 초록 말풍선으로 덮여 배경색을 잘못 잡았을 때: 왼쪽 줄(아이콘 줄)이 끝나고
+    # 밝은 배경이 12줄 넘게 이어지기 시작하는 곳
+    for x in range(30, len(modes) - 14):
+        v = modes[x][0]
+        if v >= 235 and abs(modes[x - 1][0] - v) > 2 \
+                and all(abs(m[0] - v) <= 2 and m[1] >= 0.6 for m in modes[x:x + 12]):
+            return float(x)
     return None
 
 

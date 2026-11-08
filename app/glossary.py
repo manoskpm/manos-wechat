@@ -53,18 +53,23 @@ PACKS: dict[str, dict[str, str]] = {
 FIELD_NAMES = [k for k in PACKS if k != COMMON]
 
 
-def active_terms(fields) -> dict[str, str]:
-    """공통 + 고른 분야의 단어를 합침."""
-    out = dict(PACKS[COMMON])
+LEARN_MIN = 2   # 같은 뜻으로 두 번 이상 나온 단어만 번역에 함께 알려 줌 (엉뚱한 단어가 섞이는 것 방지)
+
+
+def active_terms(fields, learned: dict | None = None) -> dict[str, str]:
+    """공통 + 고른 분야 + 쓰면서 배운 단어를 합침 (미리 넣어 둔 단어가 우선)."""
+    out = {zh: v["ko"] for zh, v in (learned or {}).items()
+           if isinstance(v, dict) and v.get("n", 0) >= LEARN_MIN and v.get("ko")}
+    out.update(PACKS[COMMON])
     for f in fields or []:
         out.update(PACKS.get(f, {}))
     return out
 
 
-def relevant(fields, text: str, direction: str, limit: int = 12) -> str:
+def relevant(fields, text: str, direction: str, limit: int = 12, learned: dict | None = None) -> str:
     """이 글에 나온 단어만 'A=B, …' 로. 없으면 빈 글.
     direction: in/intent 는 중국어 글, out 은 한국어 글."""
-    terms = active_terms(fields)
+    terms = active_terms(fields, learned)
     hits = []
     if direction == "out":
         for zh, ko in terms.items():

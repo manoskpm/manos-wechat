@@ -580,9 +580,9 @@ class Panel(QWidget):
         phrases = QPushButton("자주 쓰는 문장")
         phrases.setObjectName("tool")
         pm = QMenu(phrases)
-        for phrase in self.cfg.get("quick_phrases", []):
-            pm.addAction(phrase, lambda p=phrase: self._insert_phrase(p))
+        pm.aboutToShow.connect(lambda: self._fill_phrase_menu(pm))
         phrases.setMenu(pm)
+        self._phrase_menu = pm
         bar.addWidget(phrases)
         self.copy_lbl = QLabel("")
         self.copy_lbl.setStyleSheet(f"font-size: 12px; color: {GREEN};")
@@ -607,7 +607,9 @@ class Panel(QWidget):
         self._last_send = ""
         self._last_tone = "polite"
         self._last_pick = ""
+        self.learned = C.load_learned()   # 쓰면서 배운 단어
         self.memory = C.load_memory()   # 한 번 번역한 글은 기억해서 AI 없이 바로 씀
+        self._fill_phrase_menu(self._phrase_menu)
         self._out_entry_id = None
         self._out_done = True
         self._user_picked = False
@@ -672,6 +674,7 @@ class Panel(QWidget):
     def _settings_menu(self):
         m = QMenu(self)
         m.addAction(f"업데이트 확인 (지금 v{VERSION})", self._manual_update)
+        m.addAction(self._status_text()).setEnabled(False)
         m.addSeparator()
         auto = QAction("자동 읽기", m, checkable=True, checked=self.cfg.get("auto_read", True))
         auto.toggled.connect(lambda v: self._save_toggle("auto_read", v))
@@ -685,6 +688,8 @@ class Panel(QWidget):
         m.addSeparator()
         m.addAction("내 지시문·용어 편집", lambda: self._open(C.instructions_path()))
         m.addAction("분야 선택 (용어 도움)", self._ask_fields)
+        m.addAction("배운 단어 보기", lambda: self._open(C.learned_path()) if C.learned_path().exists()
+                    else self._info("아직 없음", "아직 배운 단어가 없어요. 번역을 쓰다 보면 자동으로 쌓입니다."))
         m.addAction("API 키 변경", self._ask_api_key)
         m.addAction("화면 인식 확인용 사진 저장", self._save_debug)
         m.addAction("데이터 폴더 열기", lambda: self._open(C.data_dir()))
@@ -781,10 +786,12 @@ class Panel(QWidget):
                     e["ko"] = m["ko"]
                     if m.get("intent"):
                         e.update(nuance=m.get("nuance", ""), certainty=m.get("certainty", "none"), intent=True)
+                    self._count("free")
                 else:
                     t = apply_template(text, self.memory.setdefault("tpl", {}))   # 숫자만 다른 글이면 틀에 끼워서
                     if t:
                         e["ko"] = t
+                        self._count("free")
             self.history.append(e)
             self._dirty = True
         self._cache[key] = e
@@ -1028,7 +1035,50 @@ class Panel(QWidget):
         self._show_compose()
         state = "done" if entry.get("intent") else ("wait" if entry.get("intent_pending") else "ask")
         self.compose.show_reading(entry.get("zh", ""), entry.get("ko") or "번역 중…", entry.get("nuance", ""),
-                                  intent_state=state, on_intent=lambda e=entry: self._request_intent(e))
+                                  intent_state=state, on_intent=lambda e=entry: self._request_intent(e),
+                                  on_edit=(lambda t, e=entry: self._fix_translation(e, t))
+                                  if entry.get("ko") else None)
+
+    def _count(self, key: str):
+        """AI 없이 처리한 번역 / AI로 번역한 수 (⚙ 설정의 현황에 보임)."""
+        st = self.memory.setdefault("stats", {})
+        st[key] = st.get(key, 0) + 1
+
+    def _fix_translation(self, entry: dict, ko: str):
+        """대표가 번역을 고침 → 다음부터 같은 글(과 숫자만 다른 글)은 고친 번역으로 나옴. AI 사용 없음."""
+        entry["ko"] = ko
+        entry.pop("pending", None)
+        mem = self.memory["in"].get(memory_key(entry.get("zh", "")), {})
+        self.memory["in"][memory_key(entry["zh"])] = {"ko": ko, "nuance": mem.get("nuance", ""),
+                                                     "certainty": mem.get("certainty", "none"),
+                                                     "intent": bool(mem.get("intent")), "fixed": True}
+        tpl = make_template(entry["zh"], ko)
+        if tpl:
+            self.memory.setdefault("tpl", {})[tpl[0]] = tpl[1]
+        self._dirty = True
+        C.save_memory(self.memory, force=True)
+        self._show_entry(entry)
+        QTimer.singleShot(0, self._render_mirror)
+
+    def _status_text(self) -> str:
+        st = self.memory.get("stats", {})
+        ai, free = st.get("ai", 0), st.get("free", 0)
+        pct = round(free * 100 / (ai + free)) if ai + free else 0
+        learned = sum(1 for v in self.learned.values() if v.get("n", 0) >= glossary.LEARN_MIN)
+        return (f"저장된 번역 {len(self.memory['in'])}건 · AI 없이 처리 {pct}% ({free}/{ai + free}) · "
+                f"배운 단어 {learned}개")
+
+    def _fill_phrase_menu(self, pm):
+        """자주 쓰는 문장 메뉴: 정해 둔 문장 + 자주 보낸 문장 (2번 이상 보낸 것)."""
+        pm.clear()
+        for phrase in self.cfg.get("quick_phrases", []):
+            pm.addAction(phrase, lambda p=phrase: self._insert_phrase(p))
+        freq = sorted(((c, k) for k, c in self.memory.get("freq", {}).items() if c >= 2), reverse=True)[:6]
+        if freq:
+            pm.addSeparator()
+            pm.addAction("— 자주 보낸 문장 —").setEnabled(False)
+            for _, k in freq:
+                pm.addAction(k if len(k) <= 30 else k[:30] + "…", lambda p=k: self._insert_phrase(p))
 
     def _request_intent(self, entry: dict):
         """[🔍 속뜻 자세히 보기] → 그때만 AI에게 속뜻 풀이를 요청 (같은 글은 다음부터 저장소에서)."""
@@ -1063,6 +1113,7 @@ class Panel(QWidget):
             t = apply_template(entry.get("zh", ""), self.memory.setdefault("tpl", {}))
             m = {"ko": t} if t else None
         if m and m.get("ko"):   # 전에 번역한 글 → AI 없이 바로
+            self._count("free")
             entry.pop("pending", None)
             entry["ko"] = m["ko"]
             if m.get("intent"):
@@ -1086,7 +1137,8 @@ class Panel(QWidget):
         vendor = self.vendor
         history = [h for h in self.history if h.get("ko") and h.get("id") != entry_id]
         req = build_request(cfg=self.cfg, user_instructions=C.load_user_instructions(), vendor=vendor,
-                            history=history, direction=direction, text=text, tone=tone)
+                            history=history, direction=direction, text=text, tone=tone,
+                            learned=self.learned)
 
         def work():
             try:
@@ -1118,7 +1170,8 @@ class Panel(QWidget):
                         self._write_log(f"빠른 번역 실패 → 기본 AI 로: {e}")
                         req2 = build_request(cfg=dict(self.cfg, fast_incoming=False),
                                              user_instructions=C.load_user_instructions(), vendor=vendor,
-                                             history=history, direction=direction, text=text, tone=tone)
+                                             history=history, direction=direction, text=text, tone=tone,
+                            learned=self.learned)
                         data = self.translator.run(req2)
                 self._write_log(f"번역 {direction} {time.perf_counter() - t0:.1f}초 ({len(text)}자, "
                                 f"{req.get('model')})")
@@ -1158,6 +1211,9 @@ class Panel(QWidget):
                     entry["ko"] = data.get("korean", "")
             else:
                 entry["ko"] = data.get("korean", "")
+                self._count("ai")
+                if C.learn_terms(self.learned, entry.get("zh", ""), data.get("terms")):   # 새 단어 수집
+                    C.save_learned(self.learned)
             self._remember_in(entry)
             if self.compose.isVisible() and getattr(self, "_shown_entry", None) == entry_id:
                 self._show_entry(entry)
@@ -1301,6 +1357,13 @@ class Panel(QWidget):
         self._last_pick = chinese
         self._user_picked = True
         self._copy(chinese)
+        mine = (self._last_send or "").split(self.APPLY_TAG)[0].strip()
+        if 2 <= len(mine) <= 80:   # 자주 보낸 문장 모으기
+            fq = self.memory.setdefault("freq", {})
+            fq[mine] = fq.get(mine, 0) + 1
+            while len(fq) > 300:
+                fq.pop(min(fq, key=fq.get))
+            C.save_memory(self.memory)
         e = next((h for h in self.history if h.get("id") == self._out_entry_id), None)
         if e is None and self._last_send:   # 저장소에서 고른 문장도 대화 기록에 남김
             e = {"id": uuid.uuid4().hex, "t": time.strftime("%Y-%m-%d %H:%M"), "side": "out", "src": "panel",

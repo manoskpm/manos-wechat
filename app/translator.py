@@ -28,7 +28,7 @@ def format_history(history: list[dict], limit: int) -> str:
 
 
 def build_request(*, cfg: dict, user_instructions: str, vendor: str, history: list[dict],
-                  direction: str, text: str, tone: str = "polite") -> dict:
+                  direction: str, text: str, tone: str = "polite", learned: dict | None = None) -> dict:
     system = SYSTEM_PROMPT
     if user_instructions.strip():
         system += "\n## 대표의 추가 지시 (우선 적용)\n" + user_instructions.strip() + "\n"
@@ -56,7 +56,7 @@ def build_request(*, cfg: dict, user_instructions: str, vendor: str, history: li
         schema = OUTGOING_SCHEMA
 
     user_content = f"거래처: {vendor or '(알 수 없음)'}\n\n최근 대화:\n{convo}\n\n{task}"
-    terms = glossary.relevant(cfg.get("fields"), text, direction)
+    terms = glossary.relevant(cfg.get("fields"), text, direction, learned=learned)
     if terms:   # 이 글에 나온 단어만 골라 알려 줌 (번역이 일관되고 정확해짐)
         user_content += f"\n\n용어집 (이 글에 나온 단어는 아래 뜻으로 쓴다): {terms}"
     if direction == "in" and cfg.get("fast_incoming", True):

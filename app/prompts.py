@@ -18,6 +18,8 @@ SYSTEM_PROMPT = """너는 한국 사업가 '마노스 대표'의 중국 공급�
 - korean: 한국 사람이 읽기 자연스러운 한국어 번역 **하나만**. 괄호로 다른 해석을 덧붙이거나 설명하지 않는다.
   업체명·상품명·브랜드 같은 고유명사만 있는 글이면 한국어 발음과 원문만 적는다. 예) 唯衣宝 → 웨이이바오(唯衣宝)
 - 번역만 한다. 속뜻 풀이는 대표가 따로 요청할 때만 한다 (아래 intent).
+- terms: 이 글에 나온 업무·상품 용어 중, 앞으로도 같은 한국어로 일관되게 번역해야 할 단어를 최대 3쌍 (zh=중국어 단어 2~8자,
+  ko=한국어 뜻 짧게). 사람 이름·업체명·숫자·일반적인 쉬운 말은 넣지 않는다. 마땅한 게 없으면 빈 배열.
 
 ## 속뜻 풀이 (intent) — 대표가 말풍선을 눌러 요청했을 때만
 - korean: 위와 같은 번역.
@@ -61,8 +63,19 @@ TONES = {
 
 INCOMING_SCHEMA = {
     "type": "object",
-    "properties": {"korean": {"type": "string"}},
-    "required": ["korean"],
+    "properties": {
+        "korean": {"type": "string"},
+        "terms": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {"zh": {"type": "string"}, "ko": {"type": "string"}},
+                "required": ["zh", "ko"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["korean", "terms"],
     "additionalProperties": False,
 }
 

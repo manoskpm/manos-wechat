@@ -99,3 +99,32 @@ def test_incoming_schema_has_terms_and_request_uses_learned():
     req = build_request(cfg=DEFAULTS, user_instructions="", vendor="x", history=[], direction="in",
                         text="底板要加厚", learned=learned)
     assert "底板=밑판" in req["messages"][0]["content"]
+
+
+def test_checks_number_and_yuan():
+    from app import checks
+    assert checks.number_warning("支付了1200元", "1200위안을 지불") == ""
+    assert checks.number_warning("支付了1,200元", "1200위안") == ""                 # 쉼표 표기는 같은 숫자
+    assert "1200" in checks.number_warning("支付了1200元", "120위안")
+    assert checks.number_warning("一共三百个", "300개") == ""                        # 한자 숫자를 풀어 쓴 건 정상
+    assert "99" in checks.number_warning("发货", "99개 발송")                        # 번역에만 생긴 숫자
+    assert checks.number_check("30个", "30개", check_extra=False) == {"missing": [], "extra": []}
+    assert checks.yuan_amounts("单价30元，运费¥12.5，共1200rmb") == [30.0, 12.5, 1200.0]
+    assert checks.won_lines("单价30元", None).startswith("💴 위안 금액이 있어요")
+    assert checks.format_won(228000) == "약 22.8만원" and checks.format_won(5795) == "약 5,800원"
+
+
+def test_similar_examples_and_prompt():
+    from app import checks
+    mem = {"in": {"老板我这边已经为这批商品支付了物流费用": {"ko": "사장님, 이 상품 물류비를 이미 냈습니다", "fixed": True},
+                 "完全不相关的一句话需要不同的意思": {"ko": "관련 없는 문장"}}, "out": {}}
+    ex = checks.similar_examples(mem, "老板我这边已经为这批商品支付了运费", "in")
+    assert ex and "물류비" in ex[0][1] and len(ex) == 1
+    req = build_request(cfg=DEFAULTS, user_instructions="", vendor="x", history=[], direction="in",
+                        text="老板我这边已经为这批商品支付了运费", examples=ex)
+    c = req["messages"][0]["content"]
+    assert "비슷한 글" in c and "사장님, 이 상품 물류비를" in c
+    req = build_request(cfg=DEFAULTS, user_instructions="", vendor="x", history=[], direction="summary",
+                        text="[업체] 단가 30위안")
+    assert "작업: summary" in req["messages"][0]["content"]
+    assert set(req["output_config"]["format"]["schema"]["required"]) == {"agreed", "open", "issues", "next"}

@@ -244,7 +244,7 @@ class ComposeWindow(QWidget):
             first.set_picked(True)
 
     def show_reading(self, zh: str, ko: str, nuance: str = "", title: str = "원문",
-                     intent_state: str = "", on_intent=None, on_edit=None):
+                     intent_state: str = "", on_intent=None, on_edit=None, extras=None):
         """말풍선을 눌렀을 때·업체 글을 복사(Ctrl+C)했을 때: 원문과 번역, 속뜻을 크게."""
         self._close_timer.stop()
         self._clear()
@@ -258,6 +258,15 @@ class ComposeWindow(QWidget):
         self._add(ko_lab)
         if on_edit:
             self._add(self._edit_row(ko, on_edit))
+        for text in extras or []:   # 숫자 경고·환산 안내
+            box = QFrame()
+            box.setObjectName("notebox")
+            bl = QVBoxLayout(box)
+            bl.setContentsMargins(12, 8, 12, 8)
+            lab = self._label(text, "note", wrap=True)
+            lab.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            bl.addWidget(lab)
+            self._add(box)
         if nuance:
             box = QFrame()
             box.setObjectName("notebox")
@@ -281,6 +290,31 @@ class ComposeWindow(QWidget):
             holder = QWidget()
             holder.setLayout(row)
             self._add(holder)
+        self.body.addStretch(1)
+
+    def show_summary(self, vendor: str, data):
+        """[📝 정리] 결과: 합의된 것 / 아직 안 정해진 것 / 문제 / 다음 할 일. data 가 None 이면 '정리하는 중'."""
+        self._close_timer.stop()
+        self._clear()
+        self._add(self._label(f"📝 {vendor or '이 대화방'} — 지금까지 정리", "mine"))
+        if data is None:
+            self._add(self._label("대화를 읽고 정리하는 중…", "zh", wrap=True))
+            self.body.addStretch(1)
+            return
+        shown = False
+        for title, key in (("✅ 합의된 것", "agreed"), ("❓ 아직 안 정해진 것", "open"),
+                           ("⚠ 문제로 남은 것", "issues"), ("👉 다음에 할 일", "next")):
+            items = [t for t in data.get(key, []) if t]
+            if not items:
+                continue
+            shown = True
+            self._add(self._label(title, "mine"))
+            for t in items:
+                lab = self._label("• " + t, "zh", wrap=True)
+                lab.setTextInteractionFlags(Qt.TextSelectableByMouse)
+                self._add(lab)
+        if not shown:
+            self._add(self._label("정리할 내용이 아직 없어요.", "zh", wrap=True))
         self.body.addStretch(1)
 
     def _edit_row(self, ko: str, on_edit) -> QWidget:

@@ -32,6 +32,8 @@ def panel(tmp_path, monkeypatch):
                 return {"options": [{"label": "정중하게(추천)", "chinese": "中:" + txt, "back_translation": "역:" + txt},
                                     {"label": "짧게", "chinese": "短:" + txt, "back_translation": "짧:" + txt}],
                         "note": ""}
+            if "작업: summary" in req["messages"][0]["content"]:
+                return {"agreed": ["단가 30위안"], "open": [], "issues": ["불량 보상 미정"], "next": []}
             if "작업: intent" in req["messages"][0]["content"]:
                 return {"korean": "한:" + txt, "nuance": "속:" + txt, "certainty": "high"}
             return {"korean": "한:" + txt}
@@ -269,3 +271,27 @@ def test_terms_are_learned_from_incoming(panel):
     p.history.append(e)
     p._handle_done("in", p.vendor, "e2", e["zh"], {"korean": "밑판은 두껍게", "terms": [{"zh": "底板", "ko": "밑판"}]})
     assert p.learned["底板"]["ko"] == "밑판"
+
+
+def test_number_warning_yuan_and_summary(panel):
+    p = panel
+    p.cfg["yuan_rate"] = 190
+    e = {"id": "n1", "zh": "物流费1200元", "ko": "물류비 120위안", "side": "in", "kind": "text"}
+    p.history.append(e)
+    extras = p._entry_extras(e)
+    assert any("1200" in x and "숫자" in x for x in extras)            # 숫자 경고
+    assert any("22.8만원" in x for x in extras)                         # 위안 → 원 환산
+    from app import checks
+    assert checks.annotate_yuan("물류비 1200위안", 190) == "물류비 1200위안(약 22.8만원)"
+    # 정리: 대화가 짧으면 안내만, 3줄 이상이면 정리 결과가 측면창에 뜸
+    for i, t in enumerate(["단가 30위안입니다", "수량은 500개로 하죠", "불량이 있었어요"]):
+        p.history.append({"id": f"s{i}", "zh": "x", "ko": t, "side": "in" if i != 1 else "out", "kind": "text"})
+    p._summarize()
+    p._drain_queue()
+    import time as _t
+    for _ in range(50):
+        p._drain_queue()
+        if "합의된 것" in "".join(w.text() for w in p.compose.findChildren(type(p.vendor_lbl))):
+            break
+        _t.sleep(0.05)
+    assert "합의된 것" in "".join(w.text() for w in p.compose.findChildren(type(p.vendor_lbl)))

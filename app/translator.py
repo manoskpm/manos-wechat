@@ -7,7 +7,7 @@ import json
 import anthropic
 
 from . import glossary
-from .prompts import INCOMING_SCHEMA, INTENT_SCHEMA, OUTGOING_SCHEMA, SYSTEM_PROMPT, TONES
+from .prompts import INCOMING_SCHEMA, INTENT_SCHEMA, OUTGOING_SCHEMA, SUMMARY_SCHEMA, SYSTEM_PROMPT, TONES
 
 # 안전 분류기가 요청을 거절하면 서버가 알아서 다른 모델로 다시 처리하게 하는 기능
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
@@ -28,7 +28,8 @@ def format_history(history: list[dict], limit: int) -> str:
 
 
 def build_request(*, cfg: dict, user_instructions: str, vendor: str, history: list[dict],
-                  direction: str, text: str, tone: str = "polite", learned: dict | None = None) -> dict:
+                  direction: str, text: str, tone: str = "polite", learned: dict | None = None,
+                  examples: list | None = None) -> dict:
     system = SYSTEM_PROMPT
     if user_instructions.strip():
         system += "\n## 대표의 추가 지시 (우선 적용)\n" + user_instructions.strip() + "\n"
@@ -40,6 +41,12 @@ def build_request(*, cfg: dict, user_instructions: str, vendor: str, history: li
             f"<message>\n{text}\n</message>"
         )
         schema = INCOMING_SCHEMA
+    elif direction == "summary":
+        task = (
+            "작업: summary. 아래 대화를 정리해.\n"
+            f"<message>\n{text}\n</message>"
+        )
+        schema = SUMMARY_SCHEMA
     elif direction == "intent":
         task = (
             "작업: intent. 대표가 이 메시지의 속뜻을 자세히 알고 싶어 한다. 번역과 속뜻 풀이를 해.\n"
@@ -56,6 +63,10 @@ def build_request(*, cfg: dict, user_instructions: str, vendor: str, history: li
         schema = OUTGOING_SCHEMA
 
     user_content = f"거래처: {vendor or '(알 수 없음)'}\n\n최근 대화:\n{convo}\n\n{task}"
+    if examples:   # 전에 번역한 비슷한 글: 용어·말투를 맞추는 참고용 (이번 글의 숫자·내용이 기준)
+        ex = "\n".join(f"- {a} → {b}" for a, b in examples[:3])
+        user_content += ("\n\n참고: 전에 번역한 비슷한 글 (같은 용어·말투를 쓰되, 이번 글의 숫자와 내용을 기준으로 "
+                         f"번역한다. 참고 글의 숫자는 쓰지 않는다)\n{ex}")
     terms = glossary.relevant(cfg.get("fields"), text, direction, learned=learned)
     if terms:   # 이 글에 나온 단어만 골라 알려 줌 (번역이 일관되고 정확해짐)
         user_content += f"\n\n용어집 (이 글에 나온 단어는 아래 뜻으로 쓴다): {terms}"

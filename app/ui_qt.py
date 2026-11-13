@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (QApplication, QCheckBox, QDialog, QDialogButtonBo
                                QLineEdit, QMenu, QMessageBox, QPlainTextEdit, QPushButton, QVBoxLayout, QWidget)
 
 from . import config as C
-from . import glossary, shortcuts, updater, win_window
+from . import checks, glossary, shortcuts, updater, win_window
 from .sentence_tpl import apply_template, make_template
 from .chat_parser import CJK_RE, is_chinese_text, memory_key, normalize, similar
 from .segment import DURATION_RE, MONEY_RE, RECALL_RE, ko_time
@@ -584,6 +584,11 @@ class Panel(QWidget):
         phrases.setMenu(pm)
         self._phrase_menu = pm
         bar.addWidget(phrases)
+        summ = QPushButton("📝 정리")
+        summ.setObjectName("tool")
+        summ.setToolTip("지금까지 대화에서 합의된 것·안 정해진 것·문제를 정리합니다")
+        summ.clicked.connect(self._summarize)
+        bar.addWidget(summ)
         self.copy_lbl = QLabel("")
         self.copy_lbl.setStyleSheet(f"font-size: 12px; color: {GREEN};")
         bar.addWidget(self.copy_lbl, 1)
@@ -688,6 +693,8 @@ class Panel(QWidget):
         m.addSeparator()
         m.addAction("내 지시문·용어 편집", lambda: self._open(C.instructions_path()))
         m.addAction("분야 선택 (용어 도움)", self._ask_fields)
+        rate = self.cfg.get("yuan_rate")
+        m.addAction(f"환율 설정 (지금 1위안={rate:g}원)" if rate else "환율 설정 (위안→원 환산)", self._ask_rate)
         m.addAction("배운 단어 보기", lambda: self._open(C.learned_path()) if C.learned_path().exists()
                     else self._info("아직 없음", "아직 배운 단어가 없어요. 번역을 쓰다 보면 자동으로 쌓입니다."))
         m.addAction("API 키 변경", self._ask_api_key)
@@ -824,8 +831,12 @@ class Panel(QWidget):
                 v.update(text="⋯", pending=True)   # 화면 끝에서 잘린 글: 다 보이면 번역 (잘린 글을 번역하면 틀림)
             elif it.kind == "text":
                 e = self._entry_for(it.side, it.text)
-                v.update(text=e.get("ko") or ("번역 중…" if e.get("pending") else ""), entry=e,
-                         nuance=e.get("nuance", ""), pending=not e.get("ko"))
+                shown = e.get("ko") or ("번역 중…" if e.get("pending") else "")
+                if e.get("ko"):
+                    shown = checks.annotate_yuan(shown, self.cfg.get("yuan_rate"))   # 1200위안(약 22.8만원)
+                    if checks.number_warning(e.get("zh", ""), e["ko"]):
+                        shown = "⚠ " + shown   # 원문과 숫자가 달라 보임 → 눌러서 확인
+                v.update(text=shown, entry=e, nuance=e.get("nuance", ""), pending=not e.get("ko"))
             elif it.kind in ("file", "link"):
                 e = self._entry_for(it.side, it.text, it.kind)
                 icon = "📄 파일" if it.kind == "file" else "🔗 링크"
@@ -1037,7 +1048,60 @@ class Panel(QWidget):
         self.compose.show_reading(entry.get("zh", ""), entry.get("ko") or "번역 중…", entry.get("nuance", ""),
                                   intent_state=state, on_intent=lambda e=entry: self._request_intent(e),
                                   on_edit=(lambda t, e=entry: self._fix_translation(e, t))
-                                  if entry.get("ko") else None)
+                                  if entry.get("ko") else None,
+                                  extras=self._entry_extras(entry))
+
+    def _entry_extras(self, entry: dict) -> list:
+        """측면창에 보일 점검 글: 숫자 대조 경고, 위안→원 환산."""
+        out = []
+        if entry.get("ko"):
+            w = checks.number_warning(entry.get("zh", ""), entry["ko"])
+            if w:
+                out.append(w)
+        wl = checks.won_lines(entry.get("zh", ""), self.cfg.get("yuan_rate"))
+        if wl:
+            out.append(wl)
+        return out
+
+    def _ask_rate(self):
+        cur = self.cfg.get("yuan_rate")
+        text, ok = QInputDialog.getText(self, "환율 설정",
+                                        "1위안이 몇 원인가요? (예: 190)\n비워 두면 원화 환산을 보이지 않습니다.",
+                                        QLineEdit.Normal, f"{cur:g}" if cur else "")
+        if not ok:
+            return
+        text = text.strip().replace(",", "")
+        if not text:
+            self.cfg["yuan_rate"] = None
+        else:
+            try:
+                rate = float(text)
+            except ValueError:
+                rate = 0
+            if not 50 <= rate <= 1000:
+                self._info("환율 확인", "숫자로 적어 주세요. (예: 190)")
+                return
+            self.cfg["yuan_rate"] = rate
+        C.save_config(self.cfg)
+        self._render_mirror()
+
+    def _summarize(self):
+        """[📝 정리] → 지금 대화방의 지금까지 대화를 AI가 합의/미정/문제/할 일로 정리 (누를 때만 AI 사용)."""
+        if not self.translator:
+            self._log_error("API 키가 없습니다. ⚙ 설정에서 API 키를 넣어 주세요.")
+            return
+        lines = []
+        for h in self.history[-80:]:
+            if not h.get("ko") or h.get("kind") in ("photo", "video", "sticker"):
+                continue
+            who = "대표" if h.get("side") == "out" else "업체"
+            lines.append(f"[{who}] {h['ko']}")
+        if len(lines) < 3:
+            self._info("대화가 짧아요", "정리할 대화가 아직 거의 없어요. 대화가 조금 쌓인 뒤에 눌러 주세요.")
+            return
+        self._show_compose()
+        self.compose.show_summary(self.vendor, None)
+        self._translate_async("summary", "\n".join(lines))
 
     def _count(self, key: str):
         """AI 없이 처리한 번역 / AI로 번역한 수 (⚙ 설정의 현황에 보임)."""
@@ -1136,9 +1200,12 @@ class Panel(QWidget):
             return
         vendor = self.vendor
         history = [h for h in self.history if h.get("ko") and h.get("id") != entry_id]
+        # 전에 번역한 비슷한 글을 AI에게 참고로 함께 줌 (용어·말투를 일관되게). 정리 요청에는 쓰지 않음
+        examples = (checks.similar_examples(self.memory, text, direction)
+                    if direction in ("in", "intent", "out") else None)
         req = build_request(cfg=self.cfg, user_instructions=C.load_user_instructions(), vendor=vendor,
                             history=history, direction=direction, text=text, tone=tone,
-                            learned=self.learned)
+                            learned=self.learned, examples=examples)
 
         def work():
             try:
@@ -1171,7 +1238,7 @@ class Panel(QWidget):
                         req2 = build_request(cfg=dict(self.cfg, fast_incoming=False),
                                              user_instructions=C.load_user_instructions(), vendor=vendor,
                                              history=history, direction=direction, text=text, tone=tone,
-                            learned=self.learned)
+                            learned=self.learned, examples=examples)
                         data = self.translator.run(req2)
                 self._write_log(f"번역 {direction} {time.perf_counter() - t0:.1f}초 ({len(text)}자, "
                                 f"{req.get('model')})")
@@ -1198,6 +1265,10 @@ class Panel(QWidget):
             C.save_history(vendor or "_미지정", hist)
 
     def _handle_done(self, direction, vendor, entry_id, text, data):
+        if direction == "summary":
+            if self._renamed.get(vendor, vendor) == self.vendor:
+                self.compose.show_summary(self.vendor, data)
+            return
         hist = self._history_of(vendor)
         if direction in ("in", "intent"):
             entry = next((h for h in hist if h.get("id") == entry_id), None)
@@ -1230,6 +1301,14 @@ class Panel(QWidget):
                 self.compose.show_error("번역 결과가 비어 있습니다. 다시 만들기를 눌러 주세요.")
                 return
             first = options[0]
+            warns = []   # 내가 쓴 숫자가 보낼 중국어 후보에서 빠졌는지 확인
+            for i, o in enumerate(options, 1):
+                miss = checks.number_check(text, o["chinese"], check_extra=False)["missing"]
+                if miss:
+                    warns.append(f"후보 {i}에서 숫자 {', '.join(miss)} 이(가) 보이지 않아요")
+            shown_note = data.get("note", "")
+            if warns:
+                shown_note = "⚠ 숫자를 확인해 주세요 — " + " / ".join(warns) + ("\n" + shown_note if shown_note else "")
             entry = {"id": uuid.uuid4().hex, "t": time.strftime("%Y-%m-%d %H:%M"), "side": "out",
                      "src": "panel", "ko": text, "zh": first["chinese"], "back": first.get("back_translation", ""),
                      "note": data.get("note", ""), "options": options}
@@ -1242,7 +1321,7 @@ class Panel(QWidget):
             self._show_compose()
             shown = text.split(self.APPLY_TAG)[0] + ("  (+ 제안 반영)" if self.APPLY_TAG in text else "")
             self._out_done = True
-            self.compose.show_options(shown, options, data.get("note", ""))
+            self.compose.show_options(shown, options, shown_note)
             if getattr(self, "_user_picked", False) and self._last_pick:
                 # 후보가 다 나오기 전에 대표가 이미 고른 문장은 그대로 둠
                 self.compose.mark_text(self._last_pick)

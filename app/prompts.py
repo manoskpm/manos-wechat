@@ -28,6 +28,14 @@ SYSTEM_PROMPT = """너는 한국 사업가 '마노스 대표'의 중국 공급�
   특별한 속뜻이 없으면 "특별한 속뜻 없이 그대로의 뜻입니다."처럼 짧게 말한다. 지어내지 않는다.
 - certainty: 확실하면 "high", 추측이면 "low", 속뜻이 없으면 "none".
 
+## 대화 정리 (summary) — 대표가 [📝 정리]를 눌렀을 때만
+- 아래 대화(한국어로 옮긴 것)를 읽고 업체와 오간 내용을 정리한다. 대화에 없는 내용은 절대 지어내지 않는다.
+- agreed: 양쪽이 이미 합의한 것 (단가·수량·납기·결제 조건·배송 방법·보상 등). 숫자와 단위는 대화에 나온 그대로.
+- open: 아직 정해지지 않았거나 답을 기다리는 것.
+- issues: 문제로 남아 있는 것 (불량, 지연, 분쟁, 비용 부담 등).
+- next: 대표가 다음에 하면 좋을 일 (대화에서 근거가 있는 것만, 최대 3개).
+- 각 항목은 한 줄로 짧게. 해당하는 게 없으면 빈 배열.
+
 ## 대표의 한국어 → 중국어 (outgoing)
 - options: 업체에 실제로 보낼 중국어 문장 후보 **3개**. 대표가 하나를 골라 보낸다.
   - 첫 번째: 지정된 말투로 가장 알맞은 문장 (추천).
@@ -109,5 +117,18 @@ OUTGOING_SCHEMA = {
         "note": {"type": "string"},
     },
     "required": ["options", "note"],
+    "additionalProperties": False,
+}
+
+
+SUMMARY_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "agreed": {"type": "array", "items": {"type": "string"}},
+        "open": {"type": "array", "items": {"type": "string"}},
+        "issues": {"type": "array", "items": {"type": "string"}},
+        "next": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["agreed", "open", "issues", "next"],
     "additionalProperties": False,
 }

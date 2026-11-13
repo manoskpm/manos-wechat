@@ -50,6 +50,8 @@ DEFAULTS = {
     "fast_model": "claude-haiku-5-5",
     # 일하는 분야 (None = 아직 안 골랐음 → 처음 켤 때 물어봄). 분야별 단어장을 번역에 함께 알려 줌
     "fields": None,
+    # 위안→원 환율 (직접 넣음. 없으면 환산 안 보임)
+    "yuan_rate": None,
     "quick_phrases": [
         "단가 확인 부탁드립니다",
         "출고일 알려주세요",
